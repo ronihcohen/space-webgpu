@@ -1,45 +1,89 @@
+/**
+ * main.ts — Entry point, game loop, and simulation.
+ *
+ * Responsibilities:
+ *   - WebGPU feature detection
+ *   - GPU init, device-lost wiring
+ *   - Fixed-timestep game loop (60Hz, MAX_FRAME=0.25)
+ *   - Full game simulation (Phase 4): player, invader grid, bullets, barriers, lives
+ *   - Instance buffer assembly for the renderer
+ *   - window.__game debug hook (DEV + test builds only)
+ */
+
 import { initGPU, type Renderer, type SpriteInstance } from './gpu/renderer';
-import { UV_INVADER_A_0, UV_INVADER_B_0, UV_INVADER_C_0, SPRITE_SIZES } from './assets/atlas';
 import {
+  UV_PLAYER,
+  UV_INVADER_A_0, UV_INVADER_A_1,
+  UV_INVADER_B_0, UV_INVADER_B_1,
+  UV_INVADER_C_0, UV_INVADER_C_1,
+  UV_BULLET_PLAYER,
+  UV_BULLET_ENEMY_STRAIGHT,
+  UV_INVADER_EXPLOSION,
+  UV_PLAYER_EXPLOSION_0,
+  UV_PLAYER_EXPLOSION_1,
+  SPRITE_SIZES,
+} from './assets/atlas';
+import {
+  type Player,
+  type Invader,
+  type Bullet,
+  type BarrierMask,
+  makeBarrierMask,
+  BARRIER_POSITIONS,
+  BARRIER_Y,
+  BARRIER_W,
+  BARRIER_H,
+  PLAYFIELD_W,
+  PLAYFIELD_H,
+  PLAYER_START_X,
+  PLAYER_START_Y,
+  PLAYER_SPEED,
+  BULLET_PLAYER_SPEED,
+  BULLET_ENEMY_SPEED,
+  MAX_ENEMY_BULLETS,
+  INVADER_FIRE_CHANCE,
   INVADER_CELL_W,
   INVADER_CELL_H,
-  INVADER_GRID_START_X,
-  INVADER_GRID_START_Y,
+  PLAYER_INVULN_DURATION,
+  EXPLOSION_FRAME_DURATION,
+  pointsForInvaderType,
 } from './game/entities';
+import {
+  makeGameState,
+  startGame,
+  togglePause,
+  autoPause,
+  triggerGameOver,
+  triggerWin,
+  returnToIdle,
+  addScore,
+  advanceWave,
+  type GameState,
+} from './game/state';
+import {
+  makeInvaderGrid,
+  aliveCount,
+  invaderWorldX,
+  invaderWorldY,
+  bottomInvadersPerColumn,
+  framesPerStep,
+  GRID_COLS,
+  type InvaderGrid,
+} from './game/spawner';
+import {
+  makeInputState,
+  attachInputListeners,
+  isDownEither,
+  wasPressed,
+  type InputState,
+} from './game/input';
+import { aabbOverlap, sweptBulletBarrierHit, applySplash, type Rect } from './game/physics';
 
-const ROWS = 5;
-const COLS = 11;
+// ── Fixed timestep constants ──────────────────────────────────────────────────
+const DT = 1 / 60;          // seconds per logic tick
+const MAX_FRAME = 0.25;     // max seconds of catch-up per RAF (clamps background-tab return)
 
-// Phase 2 test: build a static 5×11 invader grid — replaced by live game state in Phase 4
-function buildTestGrid(): SpriteInstance[] {
-  const instances: SpriteInstance[] = [];
-
-  for (let row = 0; row < ROWS; row++) {
-    // Row 0 → type C (top row, 30 pts); rows 1–2 → type B; rows 3–4 → type A
-    const uv = row === 0 ? UV_INVADER_C_0 : row <= 2 ? UV_INVADER_B_0 : UV_INVADER_A_0;
-    const size = row === 0 ? SPRITE_SIZES.invaderC : row <= 2 ? SPRITE_SIZES.invaderB : SPRITE_SIZES.invaderA;
-
-    for (let col = 0; col < COLS; col++) {
-      // Center sprite within its 16×16 grid cell
-      const cellX = INVADER_GRID_START_X + col * INVADER_CELL_W;
-      const cellY = INVADER_GRID_START_Y + row * INVADER_CELL_H;
-
-      instances.push({
-        x: cellX + (INVADER_CELL_W - size.w) / 2,
-        y: cellY + (INVADER_CELL_H - size.h) / 2,
-        w: size.w,
-        h: size.h,
-        atlasU: uv[0],
-        atlasV: uv[1],
-        atlasW: uv[2],
-        atlasH: uv[3],
-      });
-    }
-  }
-
-  return instances;
-}
-
+// ── DOM ───────────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const errorOverlay = document.getElementById('error-overlay') as HTMLDivElement;
 
@@ -48,6 +92,463 @@ function showError(msg: string): void {
   errorOverlay.classList.add('visible');
   canvas.style.display = 'none';
 }
+
+// ── Simulation state ──────────────────────────────────────────────────────────
+
+/** All mutable simulation state — replaced on wave start / game reset. */
+interface SimState {
+  player: Player;
+  grid: InvaderGrid;
+  bullets: Bullet[];
+  barriers: BarrierMask[];
+  /** Ticks the grid has accumulated since the last step */
+  gridStepAccum: number;
+  /** true = an invader explosion is showing; tracks which invader */
+  invaderExplosion: { col: number; row: number; timer: number } | null;
+}
+
+function makePlayer(): Player {
+  return {
+    x: PLAYER_START_X,
+    y: PLAYER_START_Y,
+    lives: 3,
+    explodeFrame: null,
+    invulnTimer: 0,
+    explodeTimer: 0,
+  };
+}
+
+function makeBarriers(): BarrierMask[] {
+  return BARRIER_POSITIONS.map((bx) => ({
+    mask: makeBarrierMask(),
+    x: bx,
+    y: BARRIER_Y,
+  }));
+}
+
+function makeSim(waveN: number): SimState {
+  return {
+    player: makePlayer(),
+    grid: makeInvaderGrid(waveN),
+    bullets: [],
+    barriers: makeBarriers(),
+    gridStepAccum: 0,
+    invaderExplosion: null,
+  };
+}
+
+// ── Invader world-space bounding rect ─────────────────────────────────────────
+function invaderRect(grid: InvaderGrid, inv: Invader): Rect {
+  const cx = invaderWorldX(grid, inv);
+  const cy = invaderWorldY(grid, inv);
+  const w = SPRITE_SIZES.invaderA.w; // all invaders are same display size (12×8)
+  const h = SPRITE_SIZES.invaderA.h;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+function playerRect(player: Player): Rect {
+  return {
+    x: player.x - SPRITE_SIZES.player.w / 2,
+    y: player.y - SPRITE_SIZES.player.h / 2,
+    w: SPRITE_SIZES.player.w,
+    h: SPRITE_SIZES.player.h,
+  };
+}
+
+function bulletRect(bullet: Bullet): Rect {
+  return {
+    x: bullet.x - SPRITE_SIZES.bulletPlayer.w / 2,
+    y: bullet.y - SPRITE_SIZES.bulletPlayer.h / 2,
+    w: SPRITE_SIZES.bulletPlayer.w,
+    h: SPRITE_SIZES.bulletPlayer.h,
+  };
+}
+
+// ── Simulation update ─────────────────────────────────────────────────────────
+
+function updateSim(
+  sim: SimState,
+  gs: GameState,
+  input: InputState,
+  renderer: Renderer,
+): { sim: SimState; gs: GameState; waveComplete: boolean } {
+  let { player, grid, bullets, barriers, gridStepAccum, invaderExplosion } = sim;
+  let waveComplete = false;
+
+  // ── Player explosion / respawn ──────────────────────────────────────────────
+  if (player.explodeFrame !== null) {
+    player = { ...player, explodeTimer: player.explodeTimer - DT };
+    if (player.explodeTimer <= 0) {
+      // Advance explosion frame or end explosion
+      const nextFrame = (player.explodeFrame ?? 0) + 1;
+      if (nextFrame >= 2) {
+        // Explosion finished — respawn (if lives remain; game-over already handled)
+        player = {
+          ...player,
+          x: PLAYER_START_X,
+          y: PLAYER_START_Y,
+          explodeFrame: null,
+          explodeTimer: 0,
+          invulnTimer: PLAYER_INVULN_DURATION,
+        };
+      } else {
+        player = { ...player, explodeFrame: nextFrame, explodeTimer: EXPLOSION_FRAME_DURATION };
+      }
+    }
+    // Freeze movement and firing while exploding
+    return {
+      sim: { player, grid, bullets, barriers, gridStepAccum, invaderExplosion },
+      gs,
+      waveComplete,
+    };
+  }
+
+  // ── Invuln timer ────────────────────────────────────────────────────────────
+  if (player.invulnTimer > 0) {
+    player = { ...player, invulnTimer: Math.max(0, player.invulnTimer - DT) };
+  }
+
+  // ── Player movement ─────────────────────────────────────────────────────────
+  const movingLeft  = isDownEither(input, 'ArrowLeft', 'KeyA');
+  const movingRight = isDownEither(input, 'ArrowRight', 'KeyD');
+  if (movingLeft || movingRight) {
+    const halfW = SPRITE_SIZES.player.w / 2;
+    const dx = (movingRight ? 1 : -1) * PLAYER_SPEED * DT;
+    const nx = Math.max(halfW, Math.min(PLAYFIELD_W - halfW, player.x + dx));
+    player = { ...player, x: nx };
+  }
+
+  // ── Player fire ─────────────────────────────────────────────────────────────
+  const playerBulletExists = bullets.some((b) => b.owner === 'player');
+  if (wasPressed(input, 'Space') && !playerBulletExists) {
+    bullets = [
+      ...bullets,
+      {
+        x: player.x,
+        y: player.y - SPRITE_SIZES.player.h / 2,
+        vy: BULLET_PLAYER_SPEED,
+        owner: 'player',
+        prevY: player.y - SPRITE_SIZES.player.h / 2,
+      },
+    ];
+  }
+
+  // ── Move bullets ────────────────────────────────────────────────────────────
+  bullets = bullets.map((b) => {
+    const newY = b.y + b.vy * DT;
+    return { ...b, prevY: b.y, y: newY };
+  });
+
+  // Remove out-of-bounds bullets
+  bullets = bullets.filter((b) => b.y > -16 && b.y < PLAYFIELD_H + 16);
+
+  // ── Invader grid step ───────────────────────────────────────────────────────
+  const alive = aliveCount(grid);
+  const fps = framesPerStep(alive);
+
+  gridStepAccum += 1;
+  if (gridStepAccum >= fps) {
+    gridStepAccum = 0;
+
+    // Toggle animation frame
+    const newAnimFrame: 0 | 1 = grid.animFrame === 0 ? 1 : 0;
+
+    // Determine if any invader would go out of bounds after stepping
+    const stepSize = 2; // pixels per grid step
+    let nextX = grid.gridX + grid.dir * stepSize;
+    let nextDir = grid.dir;
+    let nextY = grid.gridY;
+
+    // Find leftmost and rightmost alive invader columns
+    let minCol = GRID_COLS;
+    let maxCol = -1;
+    for (const inv of grid.invaders) {
+      if (!inv.alive) continue;
+      if (inv.col < minCol) minCol = inv.col;
+      if (inv.col > maxCol) maxCol = inv.col;
+    }
+
+    if (minCol <= GRID_COLS) {
+      const leftEdge = nextX + minCol * INVADER_CELL_W;
+      const rightEdge = nextX + maxCol * INVADER_CELL_W + INVADER_CELL_W;
+
+      if (leftEdge < 0 || rightEdge > PLAYFIELD_W) {
+        // Hit a wall: revert x move, flip direction, drop one row (8px)
+        nextX = grid.gridX;
+        nextDir = (grid.dir === 1 ? -1 : 1) as 1 | -1;
+        nextY = grid.gridY + 8;
+      }
+    }
+
+    // Update all invader animation frames
+    const newInvaders = grid.invaders.map((inv) => ({ ...inv, frame: newAnimFrame as 0 | 1 }));
+
+    grid = {
+      ...grid,
+      gridX: nextX,
+      gridY: nextY,
+      dir: nextDir,
+      animFrame: newAnimFrame,
+      invaders: newInvaders,
+    };
+  }
+
+  // ── Invader fire policy ─────────────────────────────────────────────────────
+  const enemyBulletCount = bullets.filter((b) => b.owner === 'enemy').length;
+  if (enemyBulletCount < MAX_ENEMY_BULLETS) {
+    const bottomMap = bottomInvadersPerColumn(grid);
+    const eligibleCols = Array.from(bottomMap.entries());
+
+    for (const [col, row] of eligibleCols) {
+      if (bullets.filter((b) => b.owner === 'enemy').length >= MAX_ENEMY_BULLETS) break;
+      if (Math.random() < INVADER_FIRE_CHANCE) {
+        const inv = grid.invaders.find((i) => i.alive && i.col === col && i.row === row);
+        if (inv) {
+          const bx = invaderWorldX(grid, inv);
+          const by = invaderWorldY(grid, inv) + SPRITE_SIZES.invaderA.h / 2;
+          bullets = [
+            ...bullets,
+            { x: bx, y: by, vy: BULLET_ENEMY_SPEED, owner: 'enemy', prevY: by },
+          ];
+        }
+      }
+    }
+  }
+
+  // ── Invader explosion timer ─────────────────────────────────────────────────
+  if (invaderExplosion !== null) {
+    invaderExplosion = { ...invaderExplosion, timer: invaderExplosion.timer - DT };
+    if (invaderExplosion.timer <= 0) {
+      invaderExplosion = null;
+    }
+  }
+
+  // ── Bullet ↔ invader collision ──────────────────────────────────────────────
+  const deadBulletIndices = new Set<number>();
+  const newInvaders = grid.invaders.map((inv) => ({ ...inv }));
+
+  for (let bi = 0; bi < bullets.length; bi++) {
+    const b = bullets[bi];
+    if (b.owner !== 'player') continue;
+    if (deadBulletIndices.has(bi)) continue;
+
+    for (const inv of newInvaders) {
+      if (!inv.alive) continue;
+      const ir = invaderRect(grid, inv);
+      const br = bulletRect(b);
+      if (aabbOverlap(ir, br)) {
+        inv.alive = false;
+        deadBulletIndices.add(bi);
+        gs = addScore(gs, pointsForInvaderType(inv.type));
+        // Show explosion at the invader's position briefly
+        invaderExplosion = {
+          col: inv.col,
+          row: inv.row,
+          timer: EXPLOSION_FRAME_DURATION,
+        };
+        break;
+      }
+    }
+  }
+
+  // ── Bullet ↔ player collision ───────────────────────────────────────────────
+  // Only enemy bullets hit the player; player is invulnerable during invulnTimer.
+  if (player.invulnTimer <= 0 && player.explodeFrame === null) {
+    for (let bi = 0; bi < bullets.length; bi++) {
+      const b = bullets[bi];
+      if (b.owner !== 'enemy') continue;
+      if (deadBulletIndices.has(bi)) continue;
+
+      const pr = playerRect(player);
+      const br = bulletRect(b);
+      if (aabbOverlap(pr, br)) {
+        deadBulletIndices.add(bi);
+        const newLives = player.lives - 1;
+        if (newLives <= 0) {
+          // Game over — trigger state transition
+          player = { ...player, lives: 0, explodeFrame: 0, explodeTimer: EXPLOSION_FRAME_DURATION };
+          gs = triggerGameOver(gs);
+        } else {
+          player = {
+            ...player,
+            lives: newLives,
+            explodeFrame: 0,
+            explodeTimer: EXPLOSION_FRAME_DURATION,
+          };
+        }
+        // Clear all player bullets on hit
+        bullets = bullets.filter((b2) => b2.owner !== 'player');
+        break;
+      }
+    }
+  }
+
+  // ── Bullet ↔ barrier collision ──────────────────────────────────────────────
+  const updatedBarriers = barriers.map((bar) => ({ ...bar, mask: new Uint8Array(bar.mask) }));
+
+  for (let bi = 0; bi < bullets.length; bi++) {
+    if (deadBulletIndices.has(bi)) continue;
+    const b = bullets[bi];
+
+    for (let bari = 0; bari < updatedBarriers.length; bari++) {
+      const bar = updatedBarriers[bari];
+      const hit = sweptBulletBarrierHit(b, bar);
+      if (hit) {
+        applySplash(bar, hit, b.owner);
+        // Upload the mutated mask to the GPU mirror
+        renderer.barriers.upload(bari, bar.mask);
+        deadBulletIndices.add(bi);
+        break;
+      }
+    }
+  }
+
+  // Remove dead bullets
+  bullets = bullets.filter((_, i) => !deadBulletIndices.has(i));
+
+  // Apply invader changes
+  grid = { ...grid, invaders: newInvaders };
+
+  // ── Win condition: all invaders cleared ─────────────────────────────────────
+  if (alive > 0 && aliveCount(grid) === 0) {
+    waveComplete = true;
+  }
+
+  // ── Lose condition: invaders reach player row ───────────────────────────────
+  if (gs.phase === 'PLAYING') {
+    for (const inv of grid.invaders) {
+      if (!inv.alive) continue;
+      const invBottom = invaderWorldY(grid, inv) + SPRITE_SIZES.invaderA.h / 2;
+      if (invBottom >= player.y - SPRITE_SIZES.player.h / 2) {
+        gs = triggerGameOver(gs);
+        break;
+      }
+    }
+  }
+
+  return {
+    sim: { player, grid, bullets, barriers: updatedBarriers, gridStepAccum, invaderExplosion },
+    gs,
+    waveComplete,
+  };
+}
+
+// ── Instance buffer assembly ──────────────────────────────────────────────────
+
+function buildInstances(
+  sim: SimState,
+  renderer: Renderer,
+): SpriteInstance[] {
+  const { player, grid, bullets, invaderExplosion } = sim;
+  const instances: SpriteInstance[] = [];
+
+  // ── Player ──────────────────────────────────────────────────────────────────
+  if (player.explodeFrame !== null) {
+    // Show explosion frame
+    const uvExplosion = player.explodeFrame === 0 ? UV_PLAYER_EXPLOSION_0 : UV_PLAYER_EXPLOSION_1;
+    const sz = SPRITE_SIZES.playerExplosion;
+    instances.push({
+      x: player.x - sz.w / 2,
+      y: player.y - sz.h / 2,
+      w: sz.w,
+      h: sz.h,
+      atlasU: uvExplosion[0],
+      atlasV: uvExplosion[1],
+      atlasW: uvExplosion[2],
+      atlasH: uvExplosion[3],
+    });
+  } else {
+    // Flash during invulnerability: hide every other 10-tick interval
+    const showPlayer = player.invulnTimer <= 0 ||
+      Math.floor(player.invulnTimer / (DT * 10)) % 2 === 0;
+    if (showPlayer) {
+      const sz = SPRITE_SIZES.player;
+      instances.push({
+        x: player.x - sz.w / 2,
+        y: player.y - sz.h / 2,
+        w: sz.w,
+        h: sz.h,
+        atlasU: UV_PLAYER[0],
+        atlasV: UV_PLAYER[1],
+        atlasW: UV_PLAYER[2],
+        atlasH: UV_PLAYER[3],
+      });
+    }
+  }
+
+  // ── Invaders ─────────────────────────────────────────────────────────────────
+  for (const inv of grid.invaders) {
+    if (!inv.alive) continue;
+
+    // Pick UV by type + animation frame
+    let uv: readonly [number, number, number, number];
+    if (inv.type === 'A') {
+      uv = grid.animFrame === 0 ? UV_INVADER_A_0 : UV_INVADER_A_1;
+    } else if (inv.type === 'B') {
+      uv = grid.animFrame === 0 ? UV_INVADER_B_0 : UV_INVADER_B_1;
+    } else {
+      uv = grid.animFrame === 0 ? UV_INVADER_C_0 : UV_INVADER_C_1;
+    }
+
+    const sz = SPRITE_SIZES.invaderA;
+    const cx = invaderWorldX(grid, inv);
+    const cy = invaderWorldY(grid, inv);
+    instances.push({
+      x: cx - sz.w / 2,
+      y: cy - sz.h / 2,
+      w: sz.w,
+      h: sz.h,
+      atlasU: uv[0],
+      atlasV: uv[1],
+      atlasW: uv[2],
+      atlasH: uv[3],
+    });
+  }
+
+  // ── Invader explosion ─────────────────────────────────────────────────────────
+  if (invaderExplosion !== null) {
+    // Find the invader's position from grid coords (it's already dead, use col/row)
+    const ex = grid.gridX + invaderExplosion.col * INVADER_CELL_W + INVADER_CELL_W / 2;
+    const ey = grid.gridY + invaderExplosion.row * INVADER_CELL_H + INVADER_CELL_H / 2;
+    const sz = SPRITE_SIZES.invaderExplosion;
+    instances.push({
+      x: ex - sz.w / 2,
+      y: ey - sz.h / 2,
+      w: sz.w,
+      h: sz.h,
+      atlasU: UV_INVADER_EXPLOSION[0],
+      atlasV: UV_INVADER_EXPLOSION[1],
+      atlasW: UV_INVADER_EXPLOSION[2],
+      atlasH: UV_INVADER_EXPLOSION[3],
+    });
+  }
+
+  // ── Bullets ───────────────────────────────────────────────────────────────────
+  for (const b of bullets) {
+    const uv = b.owner === 'player' ? UV_BULLET_PLAYER : UV_BULLET_ENEMY_STRAIGHT;
+    const sz = SPRITE_SIZES.bulletPlayer;
+    instances.push({
+      x: b.x - sz.w / 2,
+      y: b.y - sz.h / 2,
+      w: sz.w,
+      h: sz.h,
+      atlasU: uv[0],
+      atlasV: uv[1],
+      atlasW: uv[2],
+      atlasH: uv[3],
+    });
+  }
+
+  // ── Barriers ──────────────────────────────────────────────────────────────────
+  const barrierInstances = renderer.barriers.instances(BARRIER_POSITIONS, BARRIER_Y);
+  for (const bi of barrierInstances) {
+    instances.push(bi);
+  }
+
+  return instances;
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function bootstrap(): Promise<void> {
   if (!navigator.gpu) {
@@ -63,8 +564,8 @@ async function bootstrap(): Promise<void> {
 
   const device = await adapter.requestDevice();
 
-  // Wire device-lost handler immediately — v1 shows overlay and halts, no re-acquire
-  // (Re-init would require rebuilding pipelines + re-uploading atlas; not worth it for a single-player clone)
+  // Wire device-lost handler immediately — v1 shows overlay and halts, no re-acquire.
+  // (Re-init would require rebuilding pipelines + re-uploading atlas; not worth it for v1.)
   device.lost.then((info) => {
     showError(`GPU device lost: ${info.message}\n\nPlease reload the page.`);
   });
@@ -88,15 +589,139 @@ async function bootstrap(): Promise<void> {
   let halted = false;
   device.lost.then(() => { halted = true; });
 
-  const testInstances = buildTestGrid();
-  const startTime = performance.now();
+  // ── Input ──────────────────────────────────────────────────────────────────
+  const input = makeInputState();
+  attachInputListeners(input);
 
-  function frame(): void {
+  // ── Auto-pause on blur + visibilitychange ──────────────────────────────────
+  window.addEventListener('blur', () => { gs = autoPause(gs); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) gs = autoPause(gs);
+  });
+
+  // ── Game state ─────────────────────────────────────────────────────────────
+  let gs: GameState = makeGameState();
+  let sim: SimState = makeSim(gs.wave);
+
+  // Upload initial barrier masks to the renderer
+  for (let i = 0; i < 4; i++) {
+    renderer.barriers.upload(i, sim.barriers[i].mask);
+  }
+
+  // ── Debug hook (DEV + test builds only) ────────────────────────────────────
+  if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+    (window as unknown as Record<string, unknown>)['__game'] = {
+      get state() { return gs.phase; },
+      get score() { return gs.score; },
+      get lives() { return sim.player.lives; },
+      get bullets() { return sim.bullets; },
+      get invaders() { return sim.grid.invaders; },
+      barrierMaskAt(bx: number, by: number): number {
+        for (const bar of sim.barriers) {
+          const col = bx - Math.round(bar.x);
+          const row = by - Math.round(bar.y);
+          if (col >= 0 && col < BARRIER_W && row >= 0 && row < BARRIER_H) {
+            return bar.mask[row * BARRIER_W + col];
+          }
+        }
+        return 0;
+      },
+      start() {
+        if (gs.phase === 'IDLE') {
+          gs = startGame(gs);
+          sim = makeSim(gs.wave);
+          for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
+        }
+      },
+      reset() {
+        gs = makeGameState();
+        sim = makeSim(gs.wave);
+        for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
+      },
+      advance(ticks: number) {
+        for (let t = 0; t < ticks; t++) {
+          if (gs.phase === 'PLAYING') {
+            const result = updateSim(sim, gs, input, renderer);
+            sim = result.sim;
+            gs = result.gs;
+            if (result.waveComplete) {
+              gs = triggerWin(gs);
+            }
+          }
+        }
+      },
+    };
+  }
+
+  // ── Game loop ──────────────────────────────────────────────────────────────
+  const startTime = performance.now();
+  let lastTime = startTime;
+  let acc = 0;
+
+  function frame(now: number): void {
     if (halted) return;
-    const time = (performance.now() - startTime) / 1000;
-    renderer.draw(testInstances, time);
+
+    const rawDt = (now - lastTime) / 1000;
+    lastTime = now;
+    acc = Math.min(acc + rawDt, MAX_FRAME);
+
+    // Handle state transitions via input.
+    // IMPORTANT: wasPressed() is destructive — it consumes the event on first read.
+    // Only consume keys here for state machine transitions; leave Space unconsumed
+    // while PLAYING so updateSim can read it for firing.
+    const pPressed = wasPressed(input, 'KeyP');
+
+    if (gs.phase === 'IDLE') {
+      // Consume Space to start the game (prevents a bullet firing on the first sim tick)
+      const spacePressed = wasPressed(input, 'Space');
+      if (spacePressed || pPressed) {
+        gs = startGame(gs);
+        sim = makeSim(gs.wave);
+        for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
+        acc = 0; // discard time accumulated while on IDLE screen
+      }
+    } else if (gs.phase === 'PLAYING') {
+      // Space is NOT consumed here — updateSim reads it for firing
+      if (pPressed) gs = togglePause(gs);
+    } else if (gs.phase === 'PAUSED') {
+      // Consume Space (no-op while paused, but prevent accumulation)
+      wasPressed(input, 'Space');
+      if (pPressed) gs = togglePause(gs);
+    } else if (gs.phase === 'GAME_OVER' || gs.phase === 'WIN') {
+      const spacePressed = wasPressed(input, 'Space');
+      if (spacePressed || pPressed) {
+        gs = returnToIdle(gs);
+      }
+    }
+
+    // Run simulation ticks
+    if (gs.phase === 'PLAYING') {
+      while (acc >= DT) {
+        const result = updateSim(sim, gs, input, renderer);
+        sim = result.sim;
+        gs = result.gs;
+        acc -= DT;
+
+        if (result.waveComplete) {
+          gs = advanceWave(triggerWin(gs));
+          // TODO Phase 5: transition to next wave properly
+          // For now, WIN state returns to IDLE via user input
+          break;
+        }
+        if (gs.phase !== 'PLAYING') break; // game over or win happened
+      }
+    } else {
+      acc = 0; // don't accumulate while paused/idle
+    }
+
+    // Render
+    const time = (now - startTime) / 1000;
+    const instances = buildInstances(sim, renderer);
+    renderer.draw(instances, time);
+
     requestAnimationFrame(frame);
   }
+
   requestAnimationFrame(frame);
 }
 

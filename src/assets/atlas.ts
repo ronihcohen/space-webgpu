@@ -94,6 +94,10 @@ export function uvFor(
 //             x=  8  enemy bullet zigzag  3×8  (reserved, v1 unused)
 //             x= 12  enemy bullet fast    3×8  (reserved, v1 unused)
 //
+//  y=40..47 — row 3: utility pixels (1×1 sentinel region)
+//             x=  0  y=47  BARRIER_PIXEL — solid green (#00FF00) 1×1 px
+//             (renderer.ts samples this pixel for each solid barrier mask pixel)
+//
 // FONT ZONE layout (y = 48..71):
 //   32 columns of 8-px wide cells, 3 rows of 8-px tall cells.
 //   Glyph index = ASCII codepoint − 0x20 (space=0, '!'=1, … '~'=94).
@@ -140,6 +144,15 @@ export const UV_BULLET_ENEMY_ZIGZAG = uvFor(8, 32, 3, 8);
 
 /** Enemy bullet — fast type (reserved, not used in v1) */
 export const UV_BULLET_ENEMY_FAST = uvFor(12, 32, 3, 8);
+
+/**
+ * Barrier pixel — solid green (#00FF00) 1×1 sentinel pixel.
+ * Located at atlas position (0, 47) — bottom of the sprite zone utility row.
+ * The real atlas art must place a solid green pixel at exactly this position.
+ * renderer.ts samples this UV for each solid pixel in a barrier mask, producing
+ * the correct barrier color without a separate color uniform.
+ */
+export const UV_BARRIER_PIXEL = uvFor(0, 47, 1, 1);
 
 // ─── Font UV helper ──────────────────────────────────────────────────────────
 

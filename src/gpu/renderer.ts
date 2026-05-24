@@ -1,11 +1,13 @@
 import spriteWgsl from '../shaders/sprite.wgsl?raw';
 import atlasUrl from '../assets/sprites.png';
-import { ATLAS_W, ATLAS_H } from '../assets/atlas';
+import { ATLAS_W, ATLAS_H, UV_BARRIER_PIXEL } from '../assets/atlas';
+import { BARRIER_W, BARRIER_H } from '../game/entities';
 
 export const PLAYFIELD_W = 224;
 export const PLAYFIELD_H = 256;
 
-const MAX_INSTANCES = 300;
+// 4 barriers × 352 pixels max (22×16) + 55 invaders + player + bullets + explosions ≈ 1480 worst case
+const MAX_INSTANCES = 2048;
 const FLOATS_PER_INSTANCE = 8;
 const BYTES_PER_INSTANCE = FLOATS_PER_INSTANCE * 4; // 32 bytes
 
@@ -27,8 +29,22 @@ export interface GPUContext {
   format: GPUTextureFormat;
 }
 
+/**
+ * Barrier texture management — keeps CPU masks in sync with the GPU.
+ * Barriers are rendered as per-pixel SpriteInstances (1×1 quads per solid pixel)
+ * sampled from a solid-pixel region of the atlas. The CPU Uint8Array is
+ * authoritative; `upload` syncs state and `instances` materializes draw data.
+ */
+export interface BarrierTextures {
+  /** Copy a fresh CPU mask for one barrier (0..3). */
+  upload(barrierIndex: number, mask: Uint8Array): void;
+  /** Return SpriteInstance entries for all 4 barriers (one quad per solid pixel). */
+  instances(barrierPositions: ReadonlyArray<number>, barrierY: number): SpriteInstance[];
+}
+
 export interface Renderer {
   draw(instances: SpriteInstance[], time: number): void;
+  barriers: BarrierTextures;
 }
 
 function computeScale(viewportW: number, viewportH: number): number {
@@ -178,7 +194,55 @@ export async function initGPU(ctx: GPUContext): Promise<Renderer> {
   // Scratch CPU buffer — reused every frame to avoid GC pressure
   const instanceData = new Float32Array(MAX_INSTANCES * FLOATS_PER_INSTANCE);
 
+  // ── Barrier pixel rendering ────────────────────────────────────────────────
+  // Barriers are rendered as 1×1 playfield-unit quads, one per solid mask pixel.
+  // UV_BARRIER_PIXEL points to a solid green (#00FF00) 1×1 pixel at atlas position
+  // (0, 47). The real atlas art must place that pixel at that exact location.
+  // In Phase 4 with a placeholder atlas, barriers appear as whatever color is there.
+  const [BARRIER_PIXEL_U, BARRIER_PIXEL_V, BARRIER_PIXEL_UW, BARRIER_PIXEL_VH] = UV_BARRIER_PIXEL;
+
+  // Local copies of barrier masks (main.ts calls upload() after each mutation)
+  const barrierMasks: Uint8Array[] = [
+    new Uint8Array(BARRIER_W * BARRIER_H),
+    new Uint8Array(BARRIER_W * BARRIER_H),
+    new Uint8Array(BARRIER_W * BARRIER_H),
+    new Uint8Array(BARRIER_W * BARRIER_H),
+  ];
+
+  const barriers: BarrierTextures = {
+    upload(barrierIndex: number, mask: Uint8Array): void {
+      barrierMasks[barrierIndex].set(mask);
+    },
+
+    instances(barrierPositions: ReadonlyArray<number>, barrierY: number): SpriteInstance[] {
+      const insts: SpriteInstance[] = [];
+      for (let bi = 0; bi < 4; bi++) {
+        const mask = barrierMasks[bi];
+        const bx = barrierPositions[bi];
+        for (let row = 0; row < BARRIER_H; row++) {
+          for (let col = 0; col < BARRIER_W; col++) {
+            if (mask[row * BARRIER_W + col] !== 0) {
+              insts.push({
+                x: bx + col,
+                y: barrierY + row,
+                w: 1,
+                h: 1,
+                atlasU:  BARRIER_PIXEL_U,
+                atlasV:  BARRIER_PIXEL_V,
+                atlasW:  BARRIER_PIXEL_UW,
+                atlasH:  BARRIER_PIXEL_VH,
+              });
+            }
+          }
+        }
+      }
+      return insts;
+    },
+  };
+
   return {
+    barriers,
+
     draw(instances: SpriteInstance[], time: number): void {
       const count = Math.min(instances.length, MAX_INSTANCES);
 
