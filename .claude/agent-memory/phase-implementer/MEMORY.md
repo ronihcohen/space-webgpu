@@ -1,0 +1,2 @@
+- [Phase Completion Status](project-phase-status.md) — what's done in each phase (Phases 0–3.5 complete as of 2026-05-24)
+- [Architecture Decisions](project-architecture-decisions.md) — locked constants, patterns, and key decisions across all phases

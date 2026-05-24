@@ -1,4 +1,5 @@
 import spriteWgsl from '../shaders/sprite.wgsl?raw';
+import starfieldWgsl from '../shaders/starfield.wgsl?raw';
 import atlasUrl from '../assets/sprites.png';
 import { ATLAS_W, ATLAS_H, UV_BARRIER_PIXEL } from '../assets/atlas';
 import { BARRIER_W, BARRIER_H } from '../game/entities';
@@ -129,6 +130,27 @@ export async function initGPU(ctx: GPUContext): Promise<Renderer> {
       { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
       { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
     ],
+  });
+
+  // ── Starfield render pipeline ──────────────────────────────────────────────
+  // Fullscreen quad: 6 vertices from vertex_index, no vertex buffer.
+  // Drawn first with clearOp: 'clear'; sprite pass follows with loadOp: 'load'.
+  const starfieldModule = ctx.device.createShaderModule({ label: 'starfield', code: starfieldWgsl });
+
+  const starfieldPipeline = ctx.device.createRenderPipeline({
+    label: 'starfield',
+    layout: ctx.device.createPipelineLayout({ bindGroupLayouts: [uniformBGL] }),
+    vertex: {
+      module: starfieldModule,
+      entryPoint: 'vs_main',
+      // No vertex buffers — positions come from vertex_index in the shader
+    },
+    fragment: {
+      module: starfieldModule,
+      entryPoint: 'fs_main',
+      targets: [{ format: ctx.format }],
+    },
+    primitive: { topology: 'triangle-list' },
   });
 
   // ── Sprite render pipeline ─────────────────────────────────────────────────
@@ -269,8 +291,8 @@ export async function initGPU(ctx: GPUContext): Promise<Renderer> {
       const enc = ctx.device.createCommandEncoder();
       const view = ctx.context.getCurrentTexture().createView();
 
-      // Single pass: clear to black, then draw sprites on top
-      const pass = enc.beginRenderPass({
+      // Pass 1 — starfield background: clear to black, then draw procedural stars.
+      const starPass = enc.beginRenderPass({
         colorAttachments: [{
           view,
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
@@ -278,16 +300,30 @@ export async function initGPU(ctx: GPUContext): Promise<Renderer> {
           storeOp: 'store',
         }],
       });
+      starPass.setPipeline(starfieldPipeline);
+      starPass.setBindGroup(0, uniformBG);
+      starPass.draw(6); // 6 vertices = fullscreen quad (no vertex buffer)
+      starPass.end();
+
+      // Pass 2 — sprites: load (preserve starfield), draw all sprite instances on top.
+      const spritePass = enc.beginRenderPass({
+        colorAttachments: [{
+          view,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'load',   // preserve starfield output
+          storeOp: 'store',
+        }],
+      });
 
       if (count > 0) {
-        pass.setPipeline(spritePipeline);
-        pass.setBindGroup(0, uniformBG);
-        pass.setBindGroup(1, atlasBG);
-        pass.setVertexBuffer(0, instanceBuf);
-        pass.draw(6, count); // 6 vertices (2 triangles) × count instances
+        spritePass.setPipeline(spritePipeline);
+        spritePass.setBindGroup(0, uniformBG);
+        spritePass.setBindGroup(1, atlasBG);
+        spritePass.setVertexBuffer(0, instanceBuf);
+        spritePass.draw(6, count); // 6 vertices (2 triangles) × count instances
       }
 
-      pass.end();
+      spritePass.end();
       ctx.device.queue.submit([enc.finish()]);
     },
   };

@@ -51,6 +51,27 @@ export interface Invader {
   frame: InvaderAnimFrame;
 }
 
+// ─── UFO ──────────────────────────────────────────────────────────────────────
+
+/**
+ * UFO (mystery ship) that crosses the top of the screen.
+ * Scores random points when shot (see UFO_SCORE_VALUES).
+ *
+ * NOTE: The arcade original awards points based on the player's shot count,
+ * not RNG — this is a deliberate simplification documented here and in CLAUDE.md.
+ */
+export interface Ufo {
+  /** Center x in playfield units (moves horizontally) */
+  x: number;
+  /** Movement direction: +1 = right-to-left entry is left-to-right, actually
+   *  UFOs always enter from one side. We simplify: always enter from left (+1 dir). */
+  dir: 1 | -1;
+  /** Whether the UFO is actively on screen */
+  active: boolean;
+  /** Countdown to next UFO appearance (seconds). Reset after UFO exits or is shot. */
+  spawnTimer: number;
+}
+
 export type BulletOwner = 'player' | 'enemy';
 
 export interface Bullet {
@@ -252,5 +273,13 @@ export const UFO_SCORE_VALUES: ReadonlyArray<number> = [50, 100, 150, 300];
 /** UFO speed (px/sec) */
 export const UFO_SPEED = 50;
 
-/** UFO vertical position */
+/** UFO vertical position (center y) */
 export const UFO_Y = 24;
+
+/**
+ * Minimum seconds between UFO appearances (after the UFO exits or is destroyed).
+ * The arcade triggers a UFO every ~25 seconds on wave 1; we use a randomised
+ * window: [UFO_SPAWN_MIN_S, UFO_SPAWN_MAX_S).
+ */
+export const UFO_SPAWN_MIN_S = 20;
+export const UFO_SPAWN_MAX_S = 35;

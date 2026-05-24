@@ -257,12 +257,12 @@ Playtest for 5 minutes. If the cannon feels sluggish or fire feels laggy, fix it
 - [x] Lives, respawn freeze + invuln, game-over, win
 
 ### Phase 5 — Feel + polish
-- [ ] Invader 2-frame animation toggled on each grid step (not on a timer — synced to movement is the classic look)
-- [ ] UFO cameo on a long random timer, scrolls across top
-- [ ] Starfield background via fullscreen-quad fragment shader
-- [ ] Sound effects via Web Audio API (shoot, hit, invader step, UFO). The `AudioContext` starts in `suspended` state and only resumes after a user gesture — call `context.resume()` from the same keydown handler that transitions IDLE → PLAYING. Don't try to play anything on the IDLE screen; it'll be silent on first load with no error.
-- [ ] HUD: score, high score, lives — all via sprite-atlas bitmap font
-- [ ] `localStorage` high score
+- [x] Invader 2-frame animation toggled on each grid step (not on a timer — synced to movement is the classic look)
+- [x] UFO cameo on a long random timer, scrolls across top
+- [x] Starfield background via fullscreen-quad fragment shader
+- [x] Sound effects via Web Audio API (shoot, hit, invader step, UFO). The `AudioContext` starts in `suspended` state and only resumes after a user gesture — call `context.resume()` from the same keydown handler that transitions IDLE → PLAYING. Don't try to play anything on the IDLE screen; it'll be silent on first load with no error.
+- [x] HUD: score, high score, lives — all via sprite-atlas bitmap font
+- [x] `localStorage` high score
 
 ### Phase 6 — Hardening
 - [ ] Vitest unit tests for `physics.ts`, `spawner.ts`, `state.ts`, and the barrier-mask helpers in `entities.ts` — specific cases listed in the [Test Plan](#test-plan) section below

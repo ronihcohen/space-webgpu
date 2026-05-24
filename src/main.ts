@@ -13,6 +13,7 @@
 import { initGPU, type Renderer, type SpriteInstance } from './gpu/renderer';
 import {
   UV_PLAYER,
+  UV_UFO,
   UV_INVADER_A_0, UV_INVADER_A_1,
   UV_INVADER_B_0, UV_INVADER_B_1,
   UV_INVADER_C_0, UV_INVADER_C_1,
@@ -22,12 +23,16 @@ import {
   UV_PLAYER_EXPLOSION_0,
   UV_PLAYER_EXPLOSION_1,
   SPRITE_SIZES,
+  uvForString,
+  FONT_CELL_W,
+  FONT_CELL_H,
 } from './assets/atlas';
 import {
   type Player,
   type Invader,
   type Bullet,
   type BarrierMask,
+  type Ufo,
   makeBarrierMask,
   BARRIER_POSITIONS,
   BARRIER_Y,
@@ -47,6 +52,11 @@ import {
   PLAYER_INVULN_DURATION,
   EXPLOSION_FRAME_DURATION,
   pointsForInvaderType,
+  UFO_SCORE_VALUES,
+  UFO_SPEED,
+  UFO_Y,
+  UFO_SPAWN_MIN_S,
+  UFO_SPAWN_MAX_S,
 } from './game/entities';
 import {
   makeGameState,
@@ -78,6 +88,7 @@ import {
   type InputState,
 } from './game/input';
 import { aabbOverlap, sweptBulletBarrierHit, applySplash, type Rect } from './game/physics';
+import { makeAudioManager, type AudioManager } from './game/sound';
 
 // ── Fixed timestep constants ──────────────────────────────────────────────────
 const DT = 1 / 60;          // seconds per logic tick
@@ -101,8 +112,11 @@ interface SimState {
   grid: InvaderGrid;
   bullets: Bullet[];
   barriers: BarrierMask[];
+  ufo: Ufo;
   /** Ticks the grid has accumulated since the last step */
   gridStepAccum: number;
+  /** Cycles 0→1→2→3→0 each grid step — selects which of the 4 step sounds plays */
+  invaderStepNote: number;
   /** true = an invader explosion is showing; tracks which invader */
   invaderExplosion: { col: number; row: number; timer: number } | null;
 }
@@ -132,7 +146,14 @@ function makeSim(waveN: number): SimState {
     grid: makeInvaderGrid(waveN),
     bullets: [],
     barriers: makeBarriers(),
+    ufo: {
+      x: -SPRITE_SIZES.ufo.w / 2,
+      dir: 1,
+      active: false,
+      spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
+    },
     gridStepAccum: 0,
+    invaderStepNote: 0,
     invaderExplosion: null,
   };
 }
@@ -171,8 +192,9 @@ function updateSim(
   gs: GameState,
   input: InputState,
   renderer: Renderer,
+  audio: AudioManager,
 ): { sim: SimState; gs: GameState; waveComplete: boolean } {
-  let { player, grid, bullets, barriers, gridStepAccum, invaderExplosion } = sim;
+  let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion } = sim;
   let waveComplete = false;
 
   // ── Player explosion / respawn ──────────────────────────────────────────────
@@ -197,7 +219,7 @@ function updateSim(
     }
     // Freeze movement and firing while exploding
     return {
-      sim: { player, grid, bullets, barriers, gridStepAccum, invaderExplosion },
+      sim: { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion },
       gs,
       waveComplete,
     };
@@ -221,6 +243,7 @@ function updateSim(
   // ── Player fire ─────────────────────────────────────────────────────────────
   const playerBulletExists = bullets.some((b) => b.owner === 'player');
   if (wasPressed(input, 'Space') && !playerBulletExists) {
+    audio.shoot();
     bullets = [
       ...bullets,
       {
@@ -249,6 +272,11 @@ function updateSim(
   gridStepAccum += 1;
   if (gridStepAccum >= fps) {
     gridStepAccum = 0;
+
+    // Play the next note in the 4-note descending invader-step loop
+    const nextStepNote = ((invaderStepNote + 1) % 4) as 0 | 1 | 2 | 3;
+    audio.invaderStep(nextStepNote);
+    invaderStepNote = nextStepNote;
 
     // Toggle animation frame
     const newAnimFrame: 0 | 1 = grid.animFrame === 0 ? 1 : 0;
@@ -323,6 +351,31 @@ function updateSim(
     }
   }
 
+  // ── UFO spawn and movement ──────────────────────────────────────────────────
+  if (!ufo.active) {
+    const newTimer = ufo.spawnTimer - DT;
+    if (newTimer <= 0) {
+      // Spawn UFO from the left edge — enters horizontally across the top
+      ufo = { x: -SPRITE_SIZES.ufo.w / 2, dir: 1, active: true, spawnTimer: 0 };
+      audio.ufoStart();
+    } else {
+      ufo = { ...ufo, spawnTimer: newTimer };
+    }
+  } else {
+    const newX = ufo.x + ufo.dir * UFO_SPEED * DT;
+    if (newX > PLAYFIELD_W + SPRITE_SIZES.ufo.w / 2) {
+      // UFO exited the right edge — deactivate and set new random spawn timer
+      ufo = {
+        ...ufo,
+        active: false,
+        spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
+      };
+      audio.ufoStop();
+    } else {
+      ufo = { ...ufo, x: newX };
+    }
+  }
+
   // ── Bullet ↔ invader collision ──────────────────────────────────────────────
   const deadBulletIndices = new Set<number>();
   const newInvaders = grid.invaders.map((inv) => ({ ...inv }));
@@ -340,12 +393,40 @@ function updateSim(
         inv.alive = false;
         deadBulletIndices.add(bi);
         gs = addScore(gs, pointsForInvaderType(inv.type));
+        audio.invaderHit();
         // Show explosion at the invader's position briefly
         invaderExplosion = {
           col: inv.col,
           row: inv.row,
           timer: EXPLOSION_FRAME_DURATION,
         };
+        break;
+      }
+    }
+  }
+
+  // ── Bullet ↔ UFO collision ───────────────────────────────────────────────────
+  if (ufo.active) {
+    const ufoRect: Rect = {
+      x: ufo.x - SPRITE_SIZES.ufo.w / 2,
+      y: UFO_Y - SPRITE_SIZES.ufo.h / 2,
+      w: SPRITE_SIZES.ufo.w,
+      h: SPRITE_SIZES.ufo.h,
+    };
+    for (let bi = 0; bi < bullets.length; bi++) {
+      const b = bullets[bi];
+      if (b.owner !== 'player') continue;
+      if (deadBulletIndices.has(bi)) continue;
+      if (aabbOverlap(ufoRect, bulletRect(b))) {
+        const scoreIdx = Math.floor(Math.random() * UFO_SCORE_VALUES.length);
+        gs = addScore(gs, UFO_SCORE_VALUES[scoreIdx]);
+        ufo = {
+          ...ufo,
+          active: false,
+          spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
+        };
+        deadBulletIndices.add(bi);
+        audio.ufoHit();
         break;
       }
     }
@@ -363,6 +444,7 @@ function updateSim(
       const br = bulletRect(b);
       if (aabbOverlap(pr, br)) {
         deadBulletIndices.add(bi);
+        audio.playerHit();
         const newLives = player.lives - 1;
         if (newLives <= 0) {
           // Game over — trigger state transition
@@ -427,19 +509,100 @@ function updateSim(
   }
 
   return {
-    sim: { player, grid, bullets, barriers: updatedBarriers, gridStepAccum, invaderExplosion },
+    sim: { player, grid, bullets, barriers: updatedBarriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion },
     gs,
     waveComplete,
   };
+}
+
+// ── HUD + overlay text helpers ────────────────────────────────────────────────
+
+/** Push one sprite quad per character into `instances`, laid out left-to-right. */
+function pushText(
+  instances: SpriteInstance[],
+  text: string,
+  x: number,
+  y: number,
+): void {
+  const uvs = uvForString(text);
+  for (let i = 0; i < uvs.length; i++) {
+    const uv = uvs[i];
+    instances.push({
+      x: x + i * FONT_CELL_W,
+      y,
+      w: FONT_CELL_W,
+      h: FONT_CELL_H,
+      atlasU: uv[0],
+      atlasV: uv[1],
+      atlasW: uv[2],
+      atlasH: uv[3],
+    });
+  }
+}
+
+/** Return the x coordinate that centers `text` horizontally in the playfield. */
+function centeredX(text: string): number {
+  return Math.floor((PLAYFIELD_W - text.length * FONT_CELL_W) / 2);
+}
+
+/**
+ * Append HUD (always-visible score/hi-score/lives) and phase-specific overlay
+ * text (IDLE title, PAUSED, GAME_OVER, WIN) to the instance list.
+ */
+function buildHudInstances(
+  instances: SpriteInstance[],
+  gs: GameState,
+  player: Player,
+): void {
+  // ── Always-visible score strip ────────────────────────────────────────────
+  pushText(instances, 'SCORE', 2, 2);
+  pushText(instances, String(gs.score).padStart(5, '0'), 2, 10);
+
+  const hiLabel = 'HI-SCORE';
+  pushText(instances, hiLabel, centeredX(hiLabel), 2);
+  const hiVal = String(gs.highScore).padStart(5, '0');
+  pushText(instances, hiVal, centeredX(hiVal), 10);
+
+  // Lives (top-right) — show actual count while in-game, placeholder on IDLE
+  const livesStr = `LIVES ${gs.phase !== 'IDLE' ? String(player.lives) : '-'}`;
+  pushText(instances, livesStr, PLAYFIELD_W - livesStr.length * FONT_CELL_W - 2, 2);
+
+  // ── Phase-specific overlays ───────────────────────────────────────────────
+  if (gs.phase === 'IDLE') {
+    const title = 'SPACE INVADERS';
+    pushText(instances, title, centeredX(title), 80);
+    const prompt = 'PRESS SPACE TO START';
+    pushText(instances, prompt, centeredX(prompt), 120);
+  } else if (gs.phase === 'PAUSED') {
+    const msg = 'PAUSED';
+    pushText(instances, msg, centeredX(msg), 112);
+    const hint = 'PRESS P TO RESUME';
+    pushText(instances, hint, centeredX(hint), 124);
+  } else if (gs.phase === 'GAME_OVER') {
+    const msg = 'GAME OVER';
+    pushText(instances, msg, centeredX(msg), 100);
+    const scoreStr = `SCORE ${String(gs.score).padStart(5, '0')}`;
+    pushText(instances, scoreStr, centeredX(scoreStr), 112);
+    const hint = 'PRESS SPACE TO RETRY';
+    pushText(instances, hint, centeredX(hint), 128);
+  } else if (gs.phase === 'WIN') {
+    const msg = 'STAGE CLEAR';
+    pushText(instances, msg, centeredX(msg), 100);
+    const scoreStr = `SCORE ${String(gs.score).padStart(5, '0')}`;
+    pushText(instances, scoreStr, centeredX(scoreStr), 112);
+    const hint = 'PRESS SPACE TO CONTINUE';
+    pushText(instances, hint, centeredX(hint), 128);
+  }
 }
 
 // ── Instance buffer assembly ──────────────────────────────────────────────────
 
 function buildInstances(
   sim: SimState,
+  gs: GameState,
   renderer: Renderer,
 ): SpriteInstance[] {
-  const { player, grid, bullets, invaderExplosion } = sim;
+  const { player, grid, bullets, ufo, invaderExplosion } = sim;
   const instances: SpriteInstance[] = [];
 
   // ── Player ──────────────────────────────────────────────────────────────────
@@ -545,6 +708,24 @@ function buildInstances(
     instances.push(bi);
   }
 
+  // ── UFO ───────────────────────────────────────────────────────────────────────
+  if (ufo.active) {
+    const sz = SPRITE_SIZES.ufo;
+    instances.push({
+      x: ufo.x - sz.w / 2,
+      y: UFO_Y - sz.h / 2,
+      w: sz.w,
+      h: sz.h,
+      atlasU: UV_UFO[0],
+      atlasV: UV_UFO[1],
+      atlasW: UV_UFO[2],
+      atlasH: UV_UFO[3],
+    });
+  }
+
+  // ── HUD + overlays ────────────────────────────────────────────────────────────
+  buildHudInstances(instances, gs, player);
+
   return instances;
 }
 
@@ -588,6 +769,11 @@ async function bootstrap(): Promise<void> {
 
   let halted = false;
   device.lost.then(() => { halted = true; });
+
+  // ── Audio ──────────────────────────────────────────────────────────────────
+  // AudioManager is lazy — AudioContext is created on first resume() call.
+  // resume() must be called from a user-gesture handler (IDLE → PLAYING).
+  const audio = makeAudioManager();
 
   // ── Input ──────────────────────────────────────────────────────────────────
   const input = makeInputState();
@@ -641,7 +827,7 @@ async function bootstrap(): Promise<void> {
       advance(ticks: number) {
         for (let t = 0; t < ticks; t++) {
           if (gs.phase === 'PLAYING') {
-            const result = updateSim(sim, gs, input, renderer);
+            const result = updateSim(sim, gs, input, renderer, audio);
             sim = result.sim;
             gs = result.gs;
             if (result.waveComplete) {
@@ -675,6 +861,7 @@ async function bootstrap(): Promise<void> {
       // Consume Space to start the game (prevents a bullet firing on the first sim tick)
       const spacePressed = wasPressed(input, 'Space');
       if (spacePressed || pPressed) {
+        audio.resume(); // Unlock AudioContext — MUST be called from a user gesture
         gs = startGame(gs);
         sim = makeSim(gs.wave);
         for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
@@ -697,18 +884,21 @@ async function bootstrap(): Promise<void> {
     // Run simulation ticks
     if (gs.phase === 'PLAYING') {
       while (acc >= DT) {
-        const result = updateSim(sim, gs, input, renderer);
+        const result = updateSim(sim, gs, input, renderer, audio);
         sim = result.sim;
         gs = result.gs;
         acc -= DT;
 
         if (result.waveComplete) {
+          audio.ufoStop(); // Ensure UFO sound stops on wave clear
           gs = advanceWave(triggerWin(gs));
-          // TODO Phase 5: transition to next wave properly
-          // For now, WIN state returns to IDLE via user input
+          // WIN state returns to IDLE via user input (Space/P)
           break;
         }
-        if (gs.phase !== 'PLAYING') break; // game over or win happened
+        if (gs.phase !== 'PLAYING') {
+          audio.ufoStop(); // Ensure UFO sound stops on game over
+          break;
+        }
       }
     } else {
       acc = 0; // don't accumulate while paused/idle
@@ -716,7 +906,7 @@ async function bootstrap(): Promise<void> {
 
     // Render
     const time = (now - startTime) / 1000;
-    const instances = buildInstances(sim, renderer);
+    const instances = buildInstances(sim, gs, renderer);
     renderer.draw(instances, time);
 
     requestAnimationFrame(frame);
