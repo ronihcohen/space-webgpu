@@ -215,46 +215,46 @@ Keyboard only for v1. On-screen touch controls are out of scope — call it out 
 - [ ] License note in README if using third-party art or audio
 
 ### Phase 1 — GPU bootstrap + feature detection
-- [ ] Vite + TypeScript scaffold (`npm create vite@latest`)
-- [ ] **First thing in `main.ts`**: check `navigator.gpu` exists and `requestAdapter()` returns non-null. Show a clear "WebGPU not supported in this browser" message otherwise.
-- [ ] Wrap shader compilation and pipeline creation in `pushErrorScope('validation')` from day one — without it WebGPU errors are nearly unreadable
-- [ ] Wire `device.lost.then(...)` immediately after `requestDevice`. v1 recovery is **show a "GPU device lost — please reload" overlay and halt the loop** — no automatic re-acquire. Re-init would require rebuilding pipelines, re-uploading the atlas, and reconstructing the barrier mask textures from the CPU state; that's a chunk of work that buys little for a single-player arcade clone. Document the decision in the code comment so the next pass knows it's intentional, not forgotten.
-- [ ] Configure canvas context, clear to black each frame, confirm `requestAnimationFrame` loop runs
+- [x] Vite + TypeScript scaffold (`npm create vite@latest`)
+- [x] **First thing in `main.ts`**: check `navigator.gpu` exists and `requestAdapter()` returns non-null. Show a clear "WebGPU not supported in this browser" message otherwise.
+- [x] Wrap shader compilation and pipeline creation in `pushErrorScope('validation')` from day one — without it WebGPU errors are nearly unreadable
+- [x] Wire `device.lost.then(...)` immediately after `requestDevice`. v1 recovery is **show a "GPU device lost — please reload" overlay and halt the loop** — no automatic re-acquire. Re-init would require rebuilding pipelines, re-uploading the atlas, and reconstructing the barrier mask textures from the CPU state; that's a chunk of work that buys little for a single-player arcade clone. Document the decision in the code comment so the next pass knows it's intentional, not forgotten.
+- [x] Configure canvas context, clear to black each frame, confirm `requestAnimationFrame` loop runs
 
 ### Phase 2 — Sprite rendering
-- [ ] Load atlas via `createImageBitmap` → `copyExternalImageToTexture`
-- [ ] `sprite.wgsl`: instanced quad shader reading per-instance position + atlas UV
-- [ ] Build pipeline, draw a single test sprite, then a grid of 55 at static positions
-- [ ] Verify nearest-neighbor sampling (no blur)
+- [x] Load atlas via `createImageBitmap` → `copyExternalImageToTexture`
+- [x] `sprite.wgsl`: instanced quad shader reading per-instance position + atlas UV
+- [x] Build pipeline, draw a single test sprite, then a grid of 55 at static positions
+- [x] Verify nearest-neighbor sampling (no blur)
 
 ### Phase 3 — Game state + input
-- [ ] Entity structs (plain interfaces, no GPU types)
-- [ ] State machine + reset
-- [ ] `spawner.ts` builds the 5×11 grid
-- [ ] `input.ts` with both held (`isDown`) and edge (`wasPressed`) events for fire/pause
-- [ ] **Call `event.preventDefault()` on Space and Arrow keydowns** in the input handler — otherwise Space scrolls the page and arrows scroll too, and you'll discover this on first playtest. Only preventDefault on keys the game actually uses; don't blanket-suppress everything.
-- [ ] Auto-pause on `window.blur` **and** `document.visibilitychange` (when `document.hidden`) — `blur` alone misses some tab-switch cases on certain browsers. Resume requires explicit `P`, no auto-resume on focus, so alt-tabbing doesn't get the player killed off-screen.
+- [x] Entity structs (plain interfaces, no GPU types)
+- [x] State machine + reset
+- [x] `spawner.ts` builds the 5×11 grid
+- [x] `input.ts` with both held (`isDown`) and edge (`wasPressed`) events for fire/pause
+- [x] **Call `event.preventDefault()` on Space and Arrow keydowns** in the input handler — otherwise Space scrolls the page and arrows scroll too, and you'll discover this on first playtest. Only preventDefault on keys the game actually uses; don't blanket-suppress everything.
+- [x] Auto-pause on `window.blur` **and** `document.visibilitychange` (when `document.hidden`) — `blur` alone misses some tab-switch cases on certain browsers. Resume requires explicit `P`, no auto-resume on focus, so alt-tabbing doesn't get the player killed off-screen.
 
 ### Phase 3.5 — First playable
 
 The shortest path to "is this fun to control" before sinking time into the speed-table, barrier mask, and lives systems. Skip everything that isn't on this list.
 
-- [ ] Player moves left/right, fires one bullet
-- [ ] One row of invaders, static (no grid step, no fire)
-- [ ] Bullet ↔ invader AABB collision removes the invader
-- [ ] No win, no lose, no score, no barriers, no respawn
+- [x] Player moves left/right, fires one bullet
+- [x] One row of invaders, static (no grid step, no fire)
+- [x] Bullet ↔ invader AABB collision removes the invader
+- [x] No win, no lose, no score, no barriers, no respawn
 
 Playtest for 5 minutes. If the cannon feels sluggish or fire feels laggy, fix it here — the diagnosis is cheap when there's nothing else moving. Only then move to Phase 4.
 
 ### Phase 4 — Simulation
-- [ ] Fixed-timestep accumulator in `main.ts`
-- [ ] Player movement, firing (one-bullet rule)
-- [ ] **Intermediate step**: full 5×11 grid moves as a unit, flips direction and drops at the wall — **constant tempo, no fire yet**. Catches edge-detection and grid-wrap bugs in isolation before the speed table and fire RNG are stacked on top.
-- [ ] Invader grid step + edge detection + speed scaling (layer the per-alive-count tempo table on top of the constant-tempo grid)
-- [ ] Invader fire policy (bottom-of-column, max-3-on-screen, RNG)
-- [ ] AABB collision: bullet ↔ invader, bullet ↔ player. **Bullet ↔ bullet is a deliberate feel choice**: the original arcade lets enemy bullets pass through the player bullet (collisions are rare with only 1 player + 3 enemy bullets, and passthrough makes the game harder). Default to passthrough; only add bullet↔bullet if playtesting shows it feels wrong.
-- [ ] Per-pixel collision: bullet ↔ barrier mask, mask update via `writeTexture`
-- [ ] Lives, respawn freeze + invuln, game-over, win
+- [x] Fixed-timestep accumulator in `main.ts`
+- [x] Player movement, firing (one-bullet rule)
+- [x] **Intermediate step**: full 5×11 grid moves as a unit, flips direction and drops at the wall — **constant tempo, no fire yet**. Catches edge-detection and grid-wrap bugs in isolation before the speed table and fire RNG are stacked on top.
+- [x] Invader grid step + edge detection + speed scaling (layer the per-alive-count tempo table on top of the constant-tempo grid)
+- [x] Invader fire policy (bottom-of-column, max-3-on-screen, RNG)
+- [x] AABB collision: bullet ↔ invader, bullet ↔ player. **Bullet ↔ bullet is a deliberate feel choice**: the original arcade lets enemy bullets pass through the player bullet (collisions are rare with only 1 player + 3 enemy bullets, and passthrough makes the game harder). Default to passthrough; only add bullet↔bullet if playtesting shows it feels wrong.
+- [x] Per-pixel collision: bullet ↔ barrier mask, mask update via `writeTexture`
+- [x] Lives, respawn freeze + invuln, game-over, win
 
 ### Phase 5 — Feel + polish
 - [ ] Invader 2-frame animation toggled on each grid step (not on a timer — synced to movement is the classic look)
