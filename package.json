@@ -1,0 +1,20 @@
+{
+  "name": "space-webgpu",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@webgpu/types": "^0.1.66",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vitest": "^3.0.0"
+  }
+}

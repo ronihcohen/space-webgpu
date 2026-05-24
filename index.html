@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Space Invaders — WebGPU</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        font-family: monospace;
+      }
+      canvas {
+        display: block;
+        image-rendering: pixelated;
+      }
+      #error-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: #000;
+        color: #0f0;
+        font-family: monospace;
+        font-size: 1.2rem;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 2rem;
+        line-height: 1.6;
+      }
+      #error-overlay.visible {
+        display: flex;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div id="error-overlay"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
