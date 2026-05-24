@@ -1,4 +1,44 @@
-import { initGPU } from './gpu/renderer';
+import { initGPU, type Renderer, type SpriteInstance } from './gpu/renderer';
+import { UV_INVADER_A_0, UV_INVADER_B_0, UV_INVADER_C_0, SPRITE_SIZES } from './assets/atlas';
+import {
+  INVADER_CELL_W,
+  INVADER_CELL_H,
+  INVADER_GRID_START_X,
+  INVADER_GRID_START_Y,
+} from './game/entities';
+
+const ROWS = 5;
+const COLS = 11;
+
+// Phase 2 test: build a static 5×11 invader grid — replaced by live game state in Phase 4
+function buildTestGrid(): SpriteInstance[] {
+  const instances: SpriteInstance[] = [];
+
+  for (let row = 0; row < ROWS; row++) {
+    // Row 0 → type C (top row, 30 pts); rows 1–2 → type B; rows 3–4 → type A
+    const uv = row === 0 ? UV_INVADER_C_0 : row <= 2 ? UV_INVADER_B_0 : UV_INVADER_A_0;
+    const size = row === 0 ? SPRITE_SIZES.invaderC : row <= 2 ? SPRITE_SIZES.invaderB : SPRITE_SIZES.invaderA;
+
+    for (let col = 0; col < COLS; col++) {
+      // Center sprite within its 16×16 grid cell
+      const cellX = INVADER_GRID_START_X + col * INVADER_CELL_W;
+      const cellY = INVADER_GRID_START_Y + row * INVADER_CELL_H;
+
+      instances.push({
+        x: cellX + (INVADER_CELL_W - size.w) / 2,
+        y: cellY + (INVADER_CELL_H - size.h) / 2,
+        w: size.w,
+        h: size.h,
+        atlasU: uv[0],
+        atlasV: uv[1],
+        atlasW: uv[2],
+        atlasH: uv[3],
+      });
+    }
+  }
+
+  return instances;
+}
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const errorOverlay = document.getElementById('error-overlay') as HTMLDivElement;
@@ -10,7 +50,6 @@ function showError(msg: string): void {
 }
 
 async function bootstrap(): Promise<void> {
-  // Feature detect WebGPU
   if (!navigator.gpu) {
     showError('WebGPU is not supported in this browser.\n\nTry Chrome 113+ or Edge 113+.');
     return;
@@ -38,8 +77,9 @@ async function bootstrap(): Promise<void> {
 
   const format = navigator.gpu.getPreferredCanvasFormat();
 
+  let renderer: Renderer;
   try {
-    await initGPU({ device, context, canvas, format });
+    renderer = await initGPU({ device, context, canvas, format });
   } catch (err) {
     showError(`GPU initialization failed:\n${String(err)}`);
     return;
@@ -48,33 +88,16 @@ async function bootstrap(): Promise<void> {
   let halted = false;
   device.lost.then(() => { halted = true; });
 
-  // Minimal render loop for Phase 1 — replaced by full game loop in Phase 4
+  const testInstances = buildTestGrid();
+  const startTime = performance.now();
+
   function frame(): void {
     if (halted) return;
-    render(device, context!, canvas);
+    const time = (performance.now() - startTime) / 1000;
+    renderer.draw(testInstances, time);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-}
-
-// Phase 1 render: just clear to black each frame to confirm the loop runs
-function render(device: GPUDevice, context: GPUCanvasContext, _canvas: HTMLCanvasElement): void {
-  const commandEncoder = device.createCommandEncoder();
-  const textureView = context.getCurrentTexture().createView();
-
-  const pass = commandEncoder.beginRenderPass({
-    colorAttachments: [
-      {
-        view: textureView,
-        clearValue: { r: 0, g: 0.05, b: 0, a: 1 }, // dark green tint confirms GPU is running
-        loadOp: 'clear',
-        storeOp: 'store',
-      },
-    ],
-  });
-  pass.end();
-
-  device.queue.submit([commandEncoder.finish()]);
 }
 
 bootstrap().catch((err) => {
