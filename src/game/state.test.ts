@@ -16,6 +16,7 @@ import {
   returnToIdle,
   addScore,
   advanceWave,
+  resetLevel,
   type GameState,
 } from './state';
 
@@ -274,5 +275,50 @@ describe('advanceWave', () => {
     s = advanceWave(s);
     s = advanceWave(s);
     expect(s.wave).toBe(3);
+  });
+
+  it('increments level by 1', () => {
+    const s = advanceWave(inPhase('PLAYING'));
+    expect(s.level).toBe(2);
+  });
+
+  it('keeps phase PLAYING — wave clear must not leave PLAYING state', () => {
+    // Regression: old code called triggerWin() before advanceWave(), which set
+    // phase to WIN. When the user then pressed Space, startGame() reset level to 1.
+    const s = advanceWave(inPhase('PLAYING'));
+    expect(s.phase).toBe('PLAYING');
+  });
+
+  it('level persists across two consecutive wave clears', () => {
+    let s = inPhase('PLAYING');
+    s = advanceWave(s); // level → 2
+    s = advanceWave(s); // level → 3
+    expect(s.level).toBe(3);
+  });
+});
+
+// ─── resetLevel ───────────────────────────────────────────────────────────────
+
+describe('resetLevel', () => {
+  it('resets level to 1 from PLAYING', () => {
+    let s = inPhase('PLAYING');
+    s = advanceWave(s); // level → 2
+    s = resetLevel(s);
+    expect(s.level).toBe(1);
+  });
+
+  it('keeps phase PLAYING after reset', () => {
+    const s = resetLevel(advanceWave(inPhase('PLAYING')));
+    expect(s.phase).toBe('PLAYING');
+  });
+
+  it('is a no-op from PAUSED', () => {
+    const s = inPhase('PAUSED');
+    expect(resetLevel(s).level).toBe(s.level);
+  });
+
+  it('is a no-op from GAME_OVER', () => {
+    const s = inPhase('GAME_OVER');
+    expect(resetLevel(s).level).toBe(s.level);
   });
 });

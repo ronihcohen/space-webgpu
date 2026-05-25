@@ -910,7 +910,7 @@ async function bootstrap(): Promise<void> {
       // Consume Space (no-op while paused, but prevent accumulation)
       wasPressed(input, 'Space');
       if (pPressed) gs = togglePause(gs);
-    } else if (gs.phase === 'GAME_OVER' || gs.phase === 'WIN') {
+    } else if (gs.phase === 'GAME_OVER') {
       const spacePressed = wasPressed(input, 'Space');
       if (spacePressed || pPressed) {
         gs = returnToIdle(gs);
@@ -926,9 +926,12 @@ async function bootstrap(): Promise<void> {
         acc -= DT;
 
         if (result.waveComplete) {
-          audio.ufoStop(); // Ensure UFO sound stops on wave clear
-          gs = advanceWave(triggerWin(gs));
-          // WIN state returns to IDLE via user input (Space/P)
+          audio.ufoStop();
+          const prevLives = sim.player.lives;
+          gs = advanceWave(gs); // stay PLAYING, increment wave + level
+          sim = makeSim(gs.wave);
+          sim = { ...sim, player: { ...sim.player, lives: prevLives } };
+          for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
           break;
         }
         if (gs.phase !== 'PLAYING') {
