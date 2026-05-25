@@ -1,294 +1,293 @@
 # Phase 7 — Global Leaderboard
 
-A global high-score leaderboard backed by Supabase Postgres + Edge Functions.
+A global high-score leaderboard hosted entirely on **Vercel** — static game +
+serverless API + **Vercel Postgres (Neon)** — with **server-authoritative score
+verification by deterministic replay**.
 
-This document supersedes the "Leaderboard (Planned — Phase 7)" stub in `CLAUDE.md`.
-It is self-contained: schema, anti-cheat design, client architecture, UX flow,
+This document supersedes the "Leaderboard (Planned — Phase 7)" stub in
+`CLAUDE.md`. It is self-contained: architecture, schema, verification model,
+client library, UX flow, integration, determinism requirements, test plan,
 deployment, and a phase checklist with gate criteria.
 
 > **Status:** Planned. No leaderboard code exists yet (`src/leaderboard.ts`,
-> `supabase/` are not present). Phases 0–6 are the shipped game; this is the
-> first networked feature.
+> `api/` are not present). Phases 0–6 are the shipped game; this is the first
+> networked feature.
 
 ---
 
-## 0. Why this rewrite exists
+## 0. The core idea: never trust the score
 
-The original Phase 7 stub had real design holes. This plan closes them:
+The previous draft of this plan tried to make a *client-reported score* hard to
+forge — session tokens, server-owned `started_at`, elapsed-time plausibility,
+rate limits. All of that is heuristics layered on a number the attacker picks.
+It admitted itself (old §3.6) that a determined attacker could script a submit.
+**It was complicated and not bulletproof.**
 
-| Gap in the stub | Fix here |
-|-----------------|----------|
-| Session token was **client-minted** (`crypto.randomUUID()`) and `sessionStart` was **client-supplied**, so the "impossible time" anti-cheat check was trivially bypassed by lying about the start time | Sessions are **registered server-side** at game start via a `start-session` Edge Function. The server owns `started_at`; the client never supplies a timestamp. (§3) |
-| Two contradictory `leaderboard` insert policies (open `with check (true)` in the schema section, "no insert policy" in the anti-cheat section) | One **authoritative schema** with no client-facing insert policy. (§2) |
-| `sessions` and `rate_limit` tables referenced but never defined; no TTL cleanup mechanism | Full DDL for all three tables + `pg_cron` cleanup job. (§2) |
-| No test plan for `leaderboard.ts` or the Edge Functions | Vitest suite with mocked `fetch` + Edge Function validation tests. (§7) |
-| UX flow had no error/offline branch | Explicit failure states: submit failed, offline, retry, always returns to IDLE. (§5, §6) |
-| Name `<input>` collides with the game's `preventDefault` on Space/arrows | Game input is **suspended while the overlay field is focused**. (§6) |
-| Edge Function deployment, CORS, and secrets unspecified; CI only injected build env | `supabase` CLI deploy steps, CORS headers, secret storage, and a deploy note. (§8) |
+This rewrite makes it bulletproof against forged scores by removing the trusted
+number entirely:
+
+> The client **never sends a score.** It sends the *inputs* it played. The
+> server re-runs the exact same deterministic simulation and **computes the
+> score itself.** The only score that can land in the table is one the game's
+> own rules produce from a valid input sequence.
+
+This is possible because the game is already built for it (CLAUDE.md):
+
+- Game logic is **pure TypeScript, decoupled from the GPU** (`physics.ts`,
+  `spawner.ts`, `state.ts`) → the same module runs unchanged inside a Vercel
+  serverless function.
+- Simulation is a **fixed 60 Hz timestep** with a **seeded RNG**.
+- There is already a determinism requirement: *"Same seed + same input log + N
+  ticks produces the same final state."* That test **is** the verification
+  engine — we just run it on the server with the player's submitted inputs.
+
+### What this stops (bulletproof)
+- **Forged / arbitrary scores** — there is no score field to forge; a tampered
+  number is ignored because the server recomputes from inputs.
+- **Replayed submissions** — single-use seed (dedup table); resubmitting the
+  same run recomputes the same score and is rejected as already-submitted.
+- **Mid-game submissions** — the server only accepts a run whose simulation
+  reaches a terminal state (`GAME_OVER` or `WIN`).
+
+### What this does NOT stop (the irreducible limit — documented, not solved)
+- **Bots / TAS**: a script that feeds a *legitimate but superhuman* input log.
+  That score is achievable under the rules, so it isn't forged — it's a perfect
+  player. No replay system can tell a flawless TAS from a god-tier human; no
+  game has solved this. Out of scope.
+- **Seed-shopping** (minor): the server issues the RNG seed (§3.1), so a player
+  could request many seeds, simulate each offline, and play the luckiest one.
+  Still *legitimate play on a server-issued seed*, not a forged score. Mitigated
+  by short seed TTL + issuance rate-limit; accepted as a minor residual.
 
 ---
 
 ## 1. Architecture overview
 
+Everything is one Vercel project, one origin (so **no CORS**):
+
 ```
-                         ┌──────────────────────────────────────┐
-  browser (static)       │           Supabase project           │
-  ─────────────────      │  ──────────────────────────────────  │
-  src/leaderboard.ts     │                                      │
-    startSession() ──────┼──► Edge Fn: start-session            │
-                         │      • rate-limit by IP              │
-                         │      • insert sessions row (server   │
-                         │        owns started_at)              │
-                         │      • return { token }              │
-                         │                                      │
-    submitScore() ───────┼──► Edge Fn: submit-score             │
-                         │      • rate-limit by IP              │
-                         │      • look up session by token      │
-                         │      • elapsed-time plausibility     │
-                         │      • score cap + name sanitise     │
-                         │      • mark session submitted        │
-                         │      • service-role INSERT           │
-                         │                                      │
-    fetchTop10() ────────┼──► PostgREST (publishable key)       │
-                         │      • SELECT via "read all" RLS     │
-                         └──────────────────────────────────────┘
+                          ┌─────────────────────────────────────────────┐
+  browser (static, Vite)  │                 Vercel                       │
+  ──────────────────────  │  ───────────────────────────────────────────│
+  served from dist/  ◄─────┤  Static build (dist/)                        │
+                          │                                              │
+  src/leaderboard.ts      │  Serverless functions (api/)                 │
+    startRun()  ──────────┼─► GET  /api/start                            │
+                          │     • new random seed                        │
+                          │     • HMAC-sign {seed, issuedAt}             │
+                          │     • return SignedSeed (NO db write)         │
+                          │                                              │
+    submitRun() ──────────┼─► POST /api/submit                           │
+                          │     • verify seed signature + TTL            │
+                          │     • simulate(seed, inputLog)  ◄─ shared sim │
+                          │       → server computes score + terminal     │
+                          │     • reject if not GAME_OVER/WIN            │
+                          │     • sanitise name                          │
+                          │     • dedup seed (single-use)               │
+                          │     • INSERT leaderboard (server score)      │
+                          │     • return { rank }                        │
+                          │                                              │
+    fetchTop10()──────────┼─► GET  /api/top                              │
+                          │     • SELECT top 10                          │
+                          │                                              │
+                          │  Vercel Postgres (Neon)  ◄── functions only  │
+                          └─────────────────────────────────────────────┘
 ```
 
-- **Reads** (`fetchTop10`) go directly to PostgREST with the publishable key — RLS
-  allows `select`, nothing else.
-- **Writes** never touch the DB directly. Both write paths are Edge Functions
-  running with the service-role key (which bypasses RLS). There is **no
-  client-facing insert policy**, so a leaked publishable key cannot insert.
+- **The database connection string lives only in serverless functions.** Unlike
+  the Supabase publishable-key model, the browser has **no DB credentials and no
+  direct DB access** — every read and write goes through `api/`. A leaked client
+  bundle exposes nothing.
+- The static site and the API are the **same origin**, so there is no CORS
+  config and no cross-origin preflight to maintain.
 
 ### Files
 
 | File | Responsibility |
 |------|----------------|
-| `src/leaderboard.ts` | Supabase client + `startSession()`, `submitScore()`, `fetchTop10()`. Pure async, no GPU/game-state imports. Throws typed errors on failure. |
-| `src/leaderboard-ui.ts` | Overlay show/hide, render top-10 table, name form, input-suspension wiring. Imported by `main.ts`. |
-| `supabase/functions/start-session/index.ts` | Registers a session, returns a token. |
-| `supabase/functions/submit-score/index.ts` | Validates + inserts a score. |
-| `supabase/functions/_shared/cors.ts` | Shared CORS headers + preflight helper. |
-| `supabase/migrations/0001_leaderboard.sql` | Authoritative schema (§2). |
+| `src/game/simulate.ts` | **Headless deterministic run loop** — composes `state.ts`/`physics.ts`/`spawner.ts` into `simulate(seed, inputLog, maxTicks)` returning `{ score, ended, ticks }`. Imported by **both** the client game loop and the server. No GPU/DOM/`Date`/`Math.random`. (§9) |
+| `src/game/rng.ts` | Seeded PRNG (e.g. mulberry32) + `seedFrom(string)`. Replaces any `Math.random` in the sim. |
+| `src/leaderboard.ts` | Client API: `startRun()`, `submitRun()`, `fetchTop10()`, `sanitiseName()`, `LeaderboardError`. Pure async, no GPU imports. |
+| `src/leaderboard-ui.ts` | Overlay show/hide, render top-10, name form, input-suspension wiring. Imported by `main.ts`. |
+| `api/start.ts` | Issue a signed seed (`SignedSeed`). Stateless. |
+| `api/submit.ts` | Verify seed, **re-simulate**, validate terminal, dedup, insert. |
+| `api/top.ts` | `SELECT` top 10. |
+| `api/_lib/sign.ts` | HMAC sign/verify of `{seed, issuedAt}` using `SEED_SIGNING_SECRET`. |
+| `api/_lib/db.ts` | `@vercel/postgres` `sql` client (uses `POSTGRES_URL`). |
+| `db/schema.sql` | Authoritative schema (§2). Applied via `psql`/dashboard. |
 | `index.html` | `<div id="leaderboard-overlay">` markup (mirrors existing `#error-overlay`). |
+| `vercel.json` | Build/output config (static `dist/` + `api/` functions). |
+
+> **The server imports `src/game/`.** Vercel functions in `api/` import the
+> shared sim from `src/game/simulate.ts`. This is the whole design — keep that
+> module free of anything that doesn't run in Node (§9).
 
 ---
 
 ## 2. Database schema (authoritative)
 
-`supabase/migrations/0001_leaderboard.sql`:
+`db/schema.sql` — applied with `psql "$POSTGRES_URL" -f db/schema.sql` or via the
+Vercel Postgres dashboard SQL editor:
 
 ```sql
 -- ─── leaderboard ─────────────────────────────────────────────────────────────
-create table leaderboard (
+create table if not exists leaderboard (
   id         bigint generated always as identity primary key,
   name       text    not null check (char_length(name) between 1 and 20),
   score      integer not null check (score >= 0 and score <= 999999),
   created_at timestamptz not null default now()
 );
 
-create index leaderboard_score_desc on leaderboard (score desc, created_at asc);
+create index if not exists leaderboard_score_desc
+  on leaderboard (score desc, created_at asc);
 
-alter table leaderboard enable row level security;
-
--- Anyone may read. NO insert/update/delete policy exists:
--- the service role (used only by the submit-score Edge Function) bypasses RLS,
--- and the anon/publishable key therefore cannot write.
-create policy "read all" on leaderboard for select using (true);
-
--- ─── sessions ────────────────────────────────────────────────────────────────
--- One row per started game. Server owns started_at; the client never supplies a
--- timestamp. status flips open → submitted exactly once (single-use token).
-create table sessions (
-  token       uuid primary key default gen_random_uuid(),
-  started_at  timestamptz not null default now(),
-  status      text not null default 'open' check (status in ('open','submitted')),
-  ip          text,
-  created_at  timestamptz not null default now()
-);
-
-create index sessions_created_at on sessions (created_at);
-
-alter table sessions enable row level security;
--- No policies → only the service role (Edge Functions) can touch this table.
-
--- ─── rate_limit ──────────────────────────────────────────────────────────────
--- Sliding-window counter keyed on (ip, endpoint). One row per request; counts
--- are queried over a time window by the Edge Function.
-create table rate_limit (
-  id        bigint generated always as identity primary key,
-  ip        text not null,
-  endpoint  text not null,
+-- ─── submissions (single-use seed dedup) ─────────────────────────────────────
+-- One row per accepted run. NOT anti-cheat theater — it stops the *same* valid
+-- replay from inserting twice (idempotent submit). The seed is the natural key.
+create table if not exists submissions (
+  seed       text primary key,
   created_at timestamptz not null default now()
-);
-
-create index rate_limit_lookup on rate_limit (ip, endpoint, created_at);
-
-alter table rate_limit enable row level security;
--- No policies → service role only.
-
--- ─── cleanup (pg_cron) ───────────────────────────────────────────────────────
--- Sessions older than 2h and rate-limit rows older than 1h are disposable.
--- Enable pg_cron once (Supabase dashboard → Database → Extensions), then:
-select cron.schedule(
-  'leaderboard-cleanup', '*/15 * * * *',
-  $$
-    delete from sessions   where created_at < now() - interval '2 hours';
-    delete from rate_limit where created_at < now() - interval '1 hour';
-  $$
 );
 ```
 
 **Design notes**
 
-- The `score <= 999999` CHECK is defence-in-depth — the Edge Function rejects
-  over-cap scores first, but the DB enforces it even if the function has a bug.
-- `sessions` has no `select` policy: the client can't enumerate tokens.
-- TTL is handled by `pg_cron`, not application code. If `pg_cron` is unavailable
-  on the plan tier, fall back to a `created_at` filter in the Edge Function's
-  session lookup (`status = 'open' and created_at > now() - interval '2 hours'`)
-  and accept unbounded table growth (rows are tiny; vacuum later).
+- **No RLS, no client-facing policies needed.** Neon/Vercel Postgres is reached
+  only through serverless functions holding `POSTGRES_URL`. The browser can't
+  connect, so there is nothing to lock down at the row level — a structurally
+  simpler trust model than the publishable-key approach.
+- The `score <= 999999` CHECK is defence-in-depth. The server computes the score
+  by simulation, so it's already bounded by reachable play; the CHECK catches a
+  bug in the function, not an attacker.
+- **No `sessions` / `rate_limit` / `pg_cron` tables.** The session-token and
+  elapsed-time machinery is gone — re-simulation replaces all of it. Seed
+  freshness is enforced statelessly by the HMAC TTL (§3.1), not a DB table.
+- Optional hardening for **seed-shopping**: rate-limit `/api/start` per IP. v1
+  can skip it (seed-shopping is a minor, legitimate-play residual); if needed
+  later, add a small counter in Vercel KV/Upstash rather than a Postgres table.
 
 ---
 
-## 3. Anti-cheat design
+## 3. Verification model
 
-The threat model: the publishable key and the score value are both visible in
-the browser. We can't make cheating impossible without server-side simulation
-(out of scope), so the goal is to **raise the bar enough that the leaderboard
-stays clean without a ban system.**
+### 3.1 Server-issued, signed seed
 
-### 3.1 Server-anchored sessions (the core fix)
+The RNG seed (which drives invader fire, UFO timing, etc.) is issued by the
+server so the client can't fabricate one and can't trivially shop offline.
+**Stateless** — no DB row at start time:
 
 ```
-startGame()                       ┌─ start-session ─┐
-  POST /start-session  ──────────►│ rate-limit IP   │
-                                  │ INSERT sessions  │  started_at = now()  (server clock)
-  { token } ◄─────────────────────│ RETURN token     │
-                                  └──────────────────┘
-  store token in GameState.sessionToken
-
-… player plays …
-
-GAME_OVER / WIN (score > 0)       ┌─ submit-score ──┐
-  POST /submit-score              │ rate-limit IP    │
-    { token, name, score } ──────►│ SELECT session   │  must be status='open'
-                                  │ elapsed check    │  now() - started_at vs score
-                                  │ score cap        │  score <= 999999
-                                  │ name sanitise    │
-                                  │ UPDATE status →   │  'submitted' (single-use)
-                                  │   'submitted'     │
-                                  │ INSERT leaderboard│  service role
-  { rank, id } ◄───────────────────│ RETURN row       │
-                                  └──────────────────┘
+GET /api/start
+  seed     = randomHex(16)
+  issuedAt = Date.now()
+  sig      = HMAC_SHA256(SEED_SIGNING_SECRET, `${seed}.${issuedAt}`)
+  → { seed, issuedAt, sig }            // SignedSeed
 ```
 
-Why this is stronger than the original stub: **the client never supplies a
-timestamp.** `started_at` is written by the database on the `start-session`
-call. To submit a 50,000-point game an attacker must have called
-`start-session` at least `50000 / MAX_POINTS_PER_SECOND` seconds earlier — they
-can't backdate it. The token is single-use (`status` flips to `submitted`), so
-replaying the same `{token, score}` fails.
+On submit, the server recomputes `sig` and checks `Date.now() - issuedAt < TTL`
+(generous, e.g. 6h, to survive long sessions and pauses). A forged or expired
+seed is rejected before simulation even runs.
 
-### 3.2 Elapsed-time plausibility
+### 3.2 Tick-indexed input log
+
+The client records **the inputs the simulation actually consumed**, indexed by
+tick number — not raw OS keyboard events and **not** wall-clock time:
 
 ```ts
-const MAX_POINTS_PER_SECOND = 50; // generous; tune against real playtests
-const elapsedSec = (Date.now() - session.started_at) / 1000;
-if (score > elapsedSec * MAX_POINTS_PER_SECOND) reject('implausible-rate');
+// key codes: 0 = left, 1 = right, 2 = fire
+export interface InputEvent { tick: number; key: 0 | 1 | 2; down: boolean; }
 ```
 
-Pick `MAX_POINTS_PER_SECOND` from real games: the fastest legit scoring is a
-fully-cleared wave (~2,300 pts) in the time it takes to shoot 55 invaders +
-UFO. 50 pts/s is comfortably above any human rate while still rejecting
-"100k points in 10 seconds" bots. **Tune after Phase 5 playtest data exists.**
+Each fixed-timestep tick, the loop drains queued edges, appends them to the log
+as `(tick, key, down)`, then runs `update(dt)`. The server reconstructs the
+held-key state at any tick by replaying edges in tick order. Because the log is
+**tick-indexed**, pauses and frame-rate differences are irrelevant — the server
+advances exactly the ticks the inputs imply. This is why the elapsed-time
+plausibility check from the old design is no longer needed: real time never
+enters the verification.
 
-### 3.3 Score cap
+Payload is tiny: even a long game is a few hundred to low-thousands of edges
+(only key changes, not per-tick state) → a few KB of JSON.
 
-Max ~2,300 pts/wave (55 invaders × 30 + UFO). A long legit run is bounded;
-reject anything over **999,999** as an obvious cheat. Enforced in the Edge
-Function and as a DB CHECK.
+### 3.3 Re-simulation (the bulletproof step)
 
-### 3.4 Rate limiting
+```
+POST /api/submit  { seed, issuedAt, sig, name, inputLog }   // NO score field
 
-Both endpoints: **max 5 requests per IP per hour**, counted from the
-`rate_limit` table over a 1-hour window. IP comes from `X-Forwarded-For` (first
-hop). Note `X-Forwarded-For` is spoofable; this is a speed-bump, not a wall.
+  1. verifySig(seed, issuedAt, sig)        else 400 'bad-seed'
+  2. fresh = now - issuedAt < TTL          else 400 'expired-seed'
+  3. { score, ended, ticks } = simulate(seedFrom(seed), inputLog, MAX_TICKS)
+  4. ended ∈ {GAME_OVER, WIN}              else 400 'not-terminal'
+  5. name = sanitiseName(name)             else 400 'bad-name'
+  6. INSERT submissions(seed)              conflict → 200 'already-submitted'
+  7. INSERT leaderboard(name, score)       // score is the SERVER's number
+  8. rank = SELECT count(*) WHERE score > $score + 1
+  → { rank }
+```
+
+The client's claimed score is never read — there is no score field. Step 3 is
+the same `simulate()` the client ran (and the same one Vitest exercises in the
+determinism test), so an honest client's run reproduces exactly; a tampered
+input log just produces whatever score *that* log legitimately yields.
+
+### 3.4 Single-use (dedup)
+
+`submissions.seed` is a primary key. A second submit with the same seed hits the
+conflict at step 6 and returns `already-submitted`, which the UI treats as
+success (shows the existing rank). A double-click can't create two rows.
 
 ### 3.5 Name sanitisation
 
-Strip control characters, trim, collapse whitespace, enforce 1–20 chars after
-trimming, reject empty. Same constraints as the DB CHECK (defence in depth).
+Strip control characters, trim, collapse whitespace, enforce 1–20 chars, reject
+empty. Same constraints as the DB CHECK (defence in depth). Shared between
+client (pre-validate) and server (authoritative):
 
 ```ts
-function sanitiseName(raw: string): string | null {
-  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 20);
+export function sanitiseName(raw: string): string | null {
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
   return cleaned.length >= 1 ? cleaned : null;
 }
 ```
-
-### 3.6 What this does NOT prevent (deliberate)
-
-A determined attacker can script: call `start-session`, sleep a plausible
-interval, submit a capped score. Full prevention needs server-side game
-simulation, which is out of scope for an arcade clone. Documented as an accepted
-tradeoff — the bar is high enough to keep casual tampering out.
 
 ---
 
 ## 4. Client library (`src/leaderboard.ts`)
 
 ```ts
-import { createClient } from '@supabase/supabase-js';
+const API = '/api'; // same-origin on Vercel
 
-const URL  = import.meta.env.VITE_SUPABASE_URL;
-const KEY  = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-const FN   = `${URL}/functions/v1`;
-
-// Reads only — publishable key, RLS allows select.
-const supabase = createClient(URL, KEY);
-
-export class LeaderboardError extends Error {
-  constructor(public kind: 'offline' | 'rejected' | 'server', message: string) {
-    super(message);
-  }
-}
-
+export interface SignedSeed { seed: string; issuedAt: number; sig: string; }
+export interface InputEvent  { tick: number; key: 0 | 1 | 2; down: boolean; }
 export interface LeaderboardRow { id: number; name: string; score: number; created_at: string; }
 
-/** Called on startGame. Returns a server-issued session token, or null if the
- *  leaderboard backend is unreachable (game still plays; submission disabled). */
-export async function startSession(): Promise<string | null> { /* POST /start-session */ }
-
-/** Called on GAME_OVER/WIN when score > 0 and a token exists. */
-export async function submitScore(
-  token: string, name: string, score: number,
-): Promise<{ rank: number }> { /* POST /submit-score; throws LeaderboardError */ }
-
-/** Direct PostgREST read. */
-export async function fetchTop10(): Promise<LeaderboardRow[]> {
-  const { data, error } = await supabase
-    .from('leaderboard').select('*')
-    .order('score', { ascending: false })
-    .order('created_at', { ascending: true })
-    .limit(10);
-  if (error) throw new LeaderboardError('server', error.message);
-  return data ?? [];
+export class LeaderboardError extends Error {
+  constructor(public kind: 'offline' | 'rejected' | 'server', message: string) { super(message); }
 }
 
-/** True only if both env vars are present — lets the game disable leaderboard
- *  UI cleanly when built without Supabase config. */
-export function leaderboardConfigured(): boolean { return Boolean(URL && KEY); }
+/** Prefetched during IDLE so PLAYING can start instantly with a server seed.
+ *  Returns null if the backend is unreachable — the game still plays locally
+ *  (with a local seed) and submission is disabled. */
+export async function startRun(): Promise<SignedSeed | null> { /* GET /api/start */ }
+
+/** Called on GAME_OVER/WIN when score > 0 and the run used a server seed.
+ *  Sends inputs, NOT a score. Throws LeaderboardError. */
+export async function submitRun(
+  run: SignedSeed, name: string, inputLog: InputEvent[],
+): Promise<{ rank: number }> { /* POST /api/submit */ }
+
+export async function fetchTop10(): Promise<LeaderboardRow[]> { /* GET /api/top */ }
+
+export function sanitiseName(raw: string): string | null { /* §3.5 */ }
 ```
 
-- If `leaderboardConfigured()` is false, the game runs exactly as it does today
-  (no overlay, no network). This keeps the feature optional and the build green
-  without secrets.
-- `startSession()` swallows network errors and returns `null` — a failed
-  session start must never block the player from playing.
+- `startRun()` swallows network errors and returns `null` — a failed start must
+  never block the player. A null run means the game seeds its RNG locally and
+  the end-of-game overlay shows the top-10 read-only (no submit form).
+- No `VITE_` secrets in the client at all. The leaderboard is "available" iff the
+  API responds; there's nothing to misconfigure in the bundle.
 
 ```bash
-npm install @supabase/supabase-js
+npm install @vercel/postgres   # server-side driver, used only in api/
 ```
 
 ---
@@ -298,10 +297,10 @@ npm install @supabase/supabase-js
 ```
 GAME_OVER / WIN
   │
-  ├─ score === 0  OR  !leaderboardConfigured()
+  ├─ score === 0
   │     └─► current behaviour: Space / any key → IDLE   (no overlay)
   │
-  └─ score > 0 AND leaderboardConfigured()
+  └─ score > 0
         └─► show #leaderboard-overlay
               ┌───────────────────────────────────────────┐
               │  GLOBAL HIGH SCORES                         │
@@ -310,267 +309,314 @@ GAME_OVER / WIN
               │   …  (top 10, fetchTop10)                    │
               │  ─────────────────────────────────────────  │
               │  Your score: 4,250                           │
-              │  Name: [____]  [ Submit ]                    │
+              │  Name: [____]  [ Submit ]   ← only if run    │
+              │                               had a server   │
+              │                               seed           │
               │  ─────────────────────────────────────────  │
               │            [ Play again ]                    │
               └───────────────────────────────────────────┘
 
    States within the overlay:
-     loading   → spinner while fetchTop10() resolves
-     ready     → table + name form enabled
-     fetch-err → "Couldn't load scores." + [Retry] + table hidden; form still works
-     submitting→ Submit disabled, "Submitting…"
-     submitted → table refreshes, player's new row highlighted, form replaced by rank
-     submit-err→ inline error + [Retry]; Submit re-enabled (token NOT consumed if
-                 the server rejected before marking submitted — safe to retry)
-     offline   → "You're offline — score not submitted." + [Play again] still works
+     loading    → spinner while fetchTop10() resolves
+     ready      → table + name form (form hidden if no server seed)
+     fetch-err  → "Couldn't load scores." + [Retry]; form still works
+     submitting → Submit disabled, "Verifying…"  (server is re-simulating)
+     submitted  → table refreshes, player's row highlighted, form → rank
+     rejected   → inline error (e.g. "Run could not be verified."); Submit
+                  re-enabled only if it's a retriable kind (offline); a
+                  'rejected'/'not-terminal' is terminal — show message, no retry
+     offline    → "You're offline — score not submitted." + [Play again] works
 
    Exit (any state): Space or [Play again] → hide overlay → returnToIdle()
 ```
 
 Rules:
-- Overlay appears **only** on game end with `score > 0` and config present. The
-  IDLE attract screen never shows a leaderboard.
-- **Play again always works**, in every overlay state, even mid-error. A network
-  problem must never trap the player.
-- Submit is **idempotent-safe**: the token is single-use server-side, so a
-  double-click can't create two rows (second call hits `status='submitted'` →
-  `already-submitted`, which the UI treats as success and shows the rank).
+- Overlay appears only on game end with `score > 0`. The IDLE attract screen
+  never shows a leaderboard.
+- **Play again always works**, in every state, even mid-error.
+- Submit is **idempotent-safe** (single-use seed → `already-submitted` is treated
+  as success).
+- If the run had **no server seed** (offline at start), the overlay still shows
+  the top-10 read-only with a "scores aren't being recorded" note and no form.
 
 ---
 
 ## 6. Integration with `main.ts` and the state machine
 
-### 6.1 GameState gains a session token
+### 6.1 Seed must be ready *before* the run starts
 
-`src/game/state.ts`:
-
-```ts
-export interface GameState {
-  phase: GamePhase;
-  score: number;
-  highScore: number;
-  wave: number;
-  level: number;
-  sessionToken: string | null;   // ← new; null until startGame resolves a session
-}
-```
-
-- `makeGameState()` → `sessionToken: null`.
-- `startGame()` stays **pure** (it's unit-tested and synchronous). The async
-  `startSession()` call lives in `main.ts`, which writes the resolved token back
-  onto the state object after the transition. `startGame` just clears it to
-  `null` at the start of a run.
-- `returnToIdle()` clears `sessionToken` back to `null`.
-
-### 6.2 main.ts wiring
+`startRun()` is async but the game must start instantly on keypress, and the run
+must be seeded with the server's seed from tick 0. So **prefetch during IDLE**:
 
 ```ts
+// on load and whenever we returnToIdle():
+let pendingRun: SignedSeed | null = null;
+startRun().then(r => { pendingRun = r; });   // ready by the time the player presses start
+
 // IDLE → PLAYING (first keydown that starts the game)
-state = startGame(state);
-context.resume();                       // existing AudioContext gate
-if (leaderboardConfigured()) {
-  startSession().then(t => { state.sessionToken = t; });  // fire-and-forget
-}
+const run = pendingRun;                       // may be null (offline) → local seed
+const seed = run ? seedFrom(run.seed) : seedFrom(randomLocalSeed());
+state = startGame(state, seed);               // startGame seeds the RNG, resets inputLog
+context.resume();                             // existing AudioContext gate
+state.run = run;                              // remember for submit (null ⇒ no submit)
+pendingRun = null;                            // consumed; prefetch a fresh one next IDLE
+```
 
-// PLAYING → GAME_OVER | WIN  (after triggerGameOver / triggerWin)
-if (leaderboardConfigured() && state.score > 0) {
-  showLeaderboardOverlay(state.score, state.sessionToken);
+### 6.2 Recording the input log
+
+The fixed-timestep loop owns a `tick` counter and the input log:
+
+```ts
+while (acc >= dt) {
+  const edges = drainInputEdges();            // from input.ts queue
+  for (const e of edges) state.inputLog.push({ tick: state.tick, key: e.key, down: e.down });
+  applyEdges(state, edges);                   // update held-key state
+  update(state, dt);                          // pure sim
+  state.tick++;
 }
 ```
 
-### 6.3 Keyboard-conflict fix (the name `<input>`)
+`startGame()` stays pure and synchronous (it's unit-tested): it takes a `seed`,
+resets `tick = 0`, `inputLog = []`, and `run = null`. The async seed prefetch and
+the `state.run` assignment live in `main.ts`.
 
-`src/game/input.ts` calls `preventDefault()` on Space/arrows and listens on
-`window`. While the player types their name this would swallow the spacebar and
-let game keys leak. Fix:
+### 6.3 Submitting on game end
 
-- Add an exported `setInputEnabled(enabled: boolean)` flag in `input.ts`. When
-  disabled, the keydown handler returns early **without** `preventDefault` and
-  **without** recording held/edge state.
-- When the name `<input>` receives focus → `setInputEnabled(false)`.
-  On blur / overlay close → `setInputEnabled(true)`.
-- Belt-and-braces: the input's own `keydown` handler calls
-  `e.stopPropagation()` so keystrokes never reach the window listener even if a
-  toggle is missed.
+```ts
+// PLAYING → GAME_OVER | WIN
+if (state.score > 0) {
+  showLeaderboardOverlay({
+    score: state.score,
+    run: state.run,                 // null ⇒ read-only overlay, no form
+    inputLog: state.inputLog,
+  });
+}
+```
 
-This is listed as a gate item — it's the single most likely "works in dev, broken
-on first real play" bug in the feature.
+### 6.4 Keyboard-conflict fix (the name `<input>`)
+
+`src/game/input.ts` calls `preventDefault()` on Space/arrows on `window`. While
+the player types their name this would swallow the spacebar and leak game keys.
+Fix (unchanged from the prior plan — still required):
+
+- Export `setInputEnabled(enabled: boolean)` in `input.ts`. When disabled, the
+  keydown handler returns early **without** `preventDefault` and **without**
+  recording held/edge state.
+- Name `<input>` focus → `setInputEnabled(false)`; blur / overlay close →
+  `setInputEnabled(true)`.
+- Belt-and-braces: the input's own `keydown` calls `e.stopPropagation()`.
+
+This is a gate item — the single most likely "works in dev, broken on first real
+play" bug.
 
 ---
 
-## 7. Test plan
+## 7. Determinism (the load-bearing requirement)
 
-### 7.1 Vitest — `src/leaderboard.test.ts` (mocked `fetch`)
+Re-simulation is only bulletproof if client and server compute **bit-identical**
+results from the same `(seed, inputLog)`. Rules for `src/game/simulate.ts` and
+everything it imports:
 
-Keep `leaderboard.ts` free of GPU/game-state imports so it tests in isolation.
-Mock `fetch` / the Supabase client:
+- **One shared module, imported by both sides.** No forked copies.
+- **No nondeterministic calls in the sim:** no `Math.random` (use `src/game/rng.ts`
+  seeded PRNG), no `Date.now()` / `performance.now()`, no `Math.random`-seeded
+  shuffles. The sim's only entropy is the seed.
+- **No iteration-order hazards:** iterate arrays, not `Set`/`Map`, where order
+  affects results (e.g. invader fire selection, collision resolution order).
+- **Integer/float discipline:** JS doubles are IEEE-754 everywhere (Node +
+  browsers), so identical operations give identical bits — *as long as the
+  operations are identical*. Keep movement in the documented units-per-second
+  math; don't branch on `devicePixelRatio` or anything environment-specific
+  inside the sim.
+- **Bounded:** `simulate()` takes `MAX_TICKS` and stops; a malicious huge
+  inputLog can't spin the function forever.
 
-- `fetchTop10()` parses rows and orders by score desc, created_at asc.
-- `fetchTop10()` throws `LeaderboardError('server')` on a PostgREST error.
-- `startSession()` returns the token on 200.
-- `startSession()` returns `null` (not throw) on network failure — the
-  "playing must never be blocked" contract.
-- `submitScore()` throws `LeaderboardError('rejected')` on a 4xx (cap/rate/time).
-- `submitScore()` throws `LeaderboardError('offline')` on network failure.
-- `submitScore()` treats `already-submitted` as success (returns the rank).
-- `leaderboardConfigured()` is false when either env var is missing.
-- `sanitiseName()` (export for test): strips control chars, trims, caps at 20,
+The existing CLAUDE.md determinism test is promoted from "nice to have" to
+**security-critical** and gains a cross-environment assertion (§8.1).
+
+---
+
+## 8. Test plan
+
+### 8.1 Vitest — determinism & sim (the verification core)
+
+- **Replay determinism**: a fixed `(seed, inputLog)` → an exact, hard-coded
+  `score` and terminal state. This locks the contract both client and server
+  depend on. (Promoted from the CLAUDE.md determinism test.)
+- **Re-run stability**: calling `simulate()` twice with the same args yields
+  identical results (no hidden global state).
+- **Terminal detection**: a log that wins → `ended === 'WIN'`; one that dies →
+  `'GAME_OVER'`; a truncated log → `'in-progress'` (must be rejected on submit).
+- **Tampered input log** produces a *different* (and lower-or-equal-feel) score —
+  i.e. you can't append fake kills.
+
+### 8.2 Vitest — `src/leaderboard.test.ts` (mocked `fetch`)
+
+- `startRun()` returns the `SignedSeed` on 200; returns `null` (not throw) on
+  network failure — the "playing must never be blocked" contract.
+- `submitRun()` sends **no score field** (assert the request body shape).
+- `submitRun()` throws `LeaderboardError('rejected')` on 4xx (`bad-seed`,
+  `not-terminal`, `bad-name`).
+- `submitRun()` throws `LeaderboardError('offline')` on network failure.
+- `submitRun()` treats `already-submitted` as success (returns the rank).
+- `fetchTop10()` parses + orders by score desc, created_at asc.
+- `sanitiseName()` strips control chars, collapses whitespace, caps at 20,
   rejects empty/whitespace-only.
 
-### 7.2 Edge Function validation tests
+### 8.3 Vitest — `api/_lib/sign.ts`
 
-Run with `deno test` against the function handlers (pure functions extracted
-from the request handler so they don't need a live DB):
+- sign → verify round-trips true.
+- tampered `seed` or `issuedAt` → verify false.
+- expired `issuedAt` (beyond TTL) → rejected.
 
-- elapsed-time check rejects when `score > elapsed * MAX_POINTS_PER_SECOND`.
-- elapsed-time check passes for a plausible rate.
-- score cap rejects `> 999999`.
-- name sanitiser matches the client's (shared logic, copy or shared module).
-- single-use: a session already `submitted` is rejected as `already-submitted`.
-- rate limiter rejects the 6th request in a window, allows the 5th.
+### 8.4 Server handler tests (extracted pure functions)
 
-### 7.3 Playwright (local, optional)
+Keep the request handlers thin; extract the logic so it tests without a live DB
+(inject a fake `sql`):
 
-Add **one** integration test behind a flag (needs live Supabase or a local
-`supabase start` stack — don't wire into CI):
+- unknown/forged seed → 400 `bad-seed`.
+- expired seed → 400 `expired-seed`.
+- non-terminal run → 400 `not-terminal`.
+- score written equals `simulate()` output, **not** any client-sent number
+  (send a bogus `score` field; assert it's ignored).
+- duplicate seed → `already-submitted`, exactly one leaderboard row.
 
-- Game over with score > 0 → overlay appears, top-10 renders, submit succeeds,
-  player row highlighted, Play again returns to IDLE.
+### 8.5 Playwright (local, optional)
 
-Don't port the unit cases into Playwright — they run ~100× slower.
+One integration test behind a flag (needs `vercel dev` + a local/remote Postgres):
 
-### 7.4 Manual QA additions
+- Game over with score > 0 → overlay → submit → server-verified row appears in
+  the live top-10, highlighted → Play again → IDLE.
 
-Append to the existing checklist in `CLAUDE.md`:
+Don't port unit cases into Playwright (≈100× slower).
+
+### 8.6 Manual QA additions (append to CLAUDE.md checklist)
 
 - [ ] Overlay shows only on game end with score > 0; IDLE never shows it.
 - [ ] Typing a name doesn't move the cannon or fire (input suspended).
 - [ ] Double-clicking Submit creates exactly one row.
 - [ ] Airplane-mode game-over: overlay shows "offline", Play again still works.
-- [ ] Build with no Supabase env vars → game plays normally, no overlay, no
-      console errors.
+- [ ] Offline at *start* (no server seed): overlay shows read-only top-10, no
+      form, game played fine.
+- [ ] Tampering the request body's inputs in devtools → server rejects or
+      records a different score, never the forged one.
 
-### 7.5 Phase 7 gate
+### 8.7 Phase 7 gate
 
-> Full loop with leaderboard: game over (score > 0) → overlay → submit → row
-> appears in the live top-10 and is highlighted → Play again → IDLE. Submitting
-> the same session twice does not duplicate. A build without env vars degrades
-> cleanly to the current no-leaderboard behaviour.
+> Full loop with leaderboard: game over (score > 0) → overlay → submit (sends
+> seed + inputLog, **no score**) → server re-simulates → a row with the
+> **server-computed** score appears in the live top-10 and is highlighted → Play
+> again → IDLE. Submitting the same seed twice does not duplicate. A forged
+> score field is ignored. Backend unreachable degrades cleanly (game plays;
+> overlay read-only or absent).
 
 ---
 
-## 8. Deployment
+## 9. Deployment (all on Vercel)
 
-### 8.1 Local credentials (`.env`, gitignored)
+### 9.1 Vercel project
 
-```
-VITE_SUPABASE_URL=https://<project>.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
-```
+- Import the repo into Vercel; framework preset **Vite**, output dir `dist/`.
+- The `api/` directory at the repo root is auto-deployed as serverless
+  functions (Node runtime). No separate deploy step — `git push` ships static +
+  API together.
 
-The DB password from the Postgres connection string is **server-side only** —
-never in browser code. The service-role key lives only in Supabase function
-secrets (below), never in the repo or the client bundle.
+`vercel.json` (minimal — Vite preset handles most of it; add SPA/asset rules
+only if needed):
 
-### 8.2 Edge Function CORS
-
-GitHub Pages is a different origin from `*.supabase.co`, so the functions must
-send CORS headers and answer preflight. `supabase/functions/_shared/cors.ts`:
-
-```ts
-export const cors = {
-  'Access-Control-Allow-Origin': '*', // or pin to the Pages origin
-  'Access-Control-Allow-Headers': 'authorization, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
-export function preflight(req: Request) {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
-  return null;
+```json
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": { "api/**/*.ts": { "runtime": "nodejs20.x" } }
 }
 ```
 
-Every function returns `cors` headers on all responses.
+### 9.2 Vercel Postgres (Neon)
 
-### 8.3 Deploy steps (manual, one-time + on change)
+- In the Vercel dashboard → Storage → create a **Postgres (Neon)** database; link
+  it to the project. Vercel injects `POSTGRES_URL` (and friends) into the
+  functions' environment automatically — **no secret in the repo or client.**
+- Apply the schema once:
 
 ```bash
-# Install + link (once)
-brew install supabase/tap/supabase     # or npm i -g supabase
-supabase link --project-ref <project-ref>
-
-# Apply schema (once / on migration change)
-supabase db push                        # runs supabase/migrations/*.sql
-
-# Set the service-role key as a function secret (once)
-supabase secrets set SERVICE_ROLE_KEY=<service-role-key>
-
-# Deploy functions (on change)
-supabase functions deploy start-session
-supabase functions deploy submit-score
+psql "$POSTGRES_URL" -f db/schema.sql      # or paste into the dashboard SQL editor
 ```
 
-Edge Functions are **not** built or deployed by the GitHub Pages workflow — that
-job only ships the static `dist/`. Function deploys are a separate manual step
-(or a separate workflow later). Document this so a function change isn't silently
-missing in production.
+### 9.3 Secrets / env
 
-### 8.4 GitHub Pages build env
+| Var | Where | Purpose |
+|-----|-------|---------|
+| `POSTGRES_URL` | Vercel (auto-injected) | DB connection, **functions only** |
+| `SEED_SIGNING_SECRET` | Vercel env (set manually) | HMAC key for seed signing (§3.1) |
 
-The existing `.github/workflows/*.yml` injects build-time env into `npm run
-build`. Add the two `VITE_` vars (repo secrets):
+No `VITE_` leaderboard vars exist — the client uses the same-origin `/api`. The
+browser bundle contains zero credentials.
 
-```yaml
-      - name: Build
-        run: npm run build
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+### 9.4 Local development
+
+```bash
+npm i -g vercel
+vercel link                 # once
+vercel env pull .env.local  # pulls POSTGRES_URL + SEED_SIGNING_SECRET locally
+vercel dev                  # serves Vite + api/ together at localhost
 ```
 
-If the secrets are absent, the build still succeeds and the game ships without
-the leaderboard (`leaderboardConfigured()` → false). That keeps the deploy
-unblocked while credentials are being set up.
+Without a linked DB, `vercel dev` still serves the game; `/api/*` returns errors
+and the client degrades to the offline path (read-only / no submit).
 
 ---
 
-## 9. Implementation checklist
+## 10. Implementation checklist
 
-### 9.1 Backend
-- [ ] Create Supabase project; note URL + publishable key + service-role key.
-- [ ] `supabase/migrations/0001_leaderboard.sql` — three tables, RLS, indexes (§2).
-- [ ] Enable `pg_cron`; schedule the cleanup job.
-- [ ] `_shared/cors.ts` + preflight helper.
-- [ ] `start-session` Edge Function: rate-limit, insert session, return token.
-- [ ] `submit-score` Edge Function: rate-limit, session lookup, elapsed check,
-      score cap, name sanitise, mark submitted, service-role insert.
-- [ ] `supabase secrets set SERVICE_ROLE_KEY=…`; deploy both functions.
-- [ ] Deno tests for the extracted validation functions (§7.2).
+### 10.1 Shared sim (do this first — it's the foundation)
+- [ ] `src/game/rng.ts` — seeded PRNG + `seedFrom(string)`; purge `Math.random`
+      from the sim path.
+- [ ] `src/game/simulate.ts` — headless `simulate(seed, inputLog, maxTicks)` →
+      `{ score, ended, ticks }`, composed from existing pure modules (§1, §7).
+- [ ] Refactor `main.ts` loop to drive the sim via the same input-log path so the
+      client's authoritative run matches the server's replay (§6.2).
+- [ ] Vitest: replay determinism, re-run stability, terminal detection (§8.1).
 
-### 9.2 Client
-- [ ] `npm install @supabase/supabase-js`.
-- [ ] `src/leaderboard.ts` — `startSession`, `submitScore`, `fetchTop10`,
-      `leaderboardConfigured`, `LeaderboardError`, `sanitiseName` (§4).
-- [ ] `src/leaderboard.test.ts` — mocked-fetch suite (§7.1).
-- [ ] `GameState.sessionToken` field; clear in `startGame`/`returnToIdle` (§6.1).
-- [ ] `input.ts` — `setInputEnabled()` flag (§6.3).
+### 10.2 Backend (Vercel functions)
+- [ ] `db/schema.sql` — `leaderboard` + `submissions` (§2).
+- [ ] `api/_lib/db.ts` — `@vercel/postgres` client.
+- [ ] `api/_lib/sign.ts` — HMAC sign/verify (+ tests, §8.3).
+- [ ] `api/start.ts` — issue signed seed (§3.1).
+- [ ] `api/submit.ts` — verify, re-simulate, validate terminal, dedup, insert
+      (§3.3); handler logic extracted + tested (§8.4).
+- [ ] `api/top.ts` — top-10 select.
+- [ ] `vercel.json`.
+
+### 10.3 Client
+- [ ] `src/leaderboard.ts` — `startRun`, `submitRun`, `fetchTop10`, `sanitiseName`,
+      `LeaderboardError` (§4).
+- [ ] `src/leaderboard.test.ts` — mocked-fetch suite (§8.2).
+- [ ] `GameState` gains `seed`, `tick`, `inputLog`, `run`; `startGame(state, seed)`
+      resets them; `returnToIdle()` clears `run` (§6.1).
+- [ ] `input.ts` — `setInputEnabled()` flag (§6.4).
 - [ ] `index.html` — `#leaderboard-overlay` markup + styles (mirror `#error-overlay`).
 - [ ] `src/leaderboard-ui.ts` — overlay states, top-10 render, name form,
-      input-suspension wiring (§5, §6.3).
-- [ ] `main.ts` — fire `startSession` on start; show overlay on end (§6.2).
-- [ ] `.env` locally; repo secrets + workflow env injection (§8).
+      input-suspension wiring (§5, §6.4).
+- [ ] `main.ts` — prefetch seed on IDLE, start with it, record input log, show
+      overlay on end (§6.1–6.3).
 
-### 9.3 Verify
+### 10.4 Deploy & verify
+- [ ] Vercel project + Postgres (Neon) linked; `db/schema.sql` applied (§9).
+- [ ] `SEED_SIGNING_SECRET` set in Vercel env.
 - [ ] Vitest green (`npm run test`).
-- [ ] Manual QA additions (§7.4) pass.
-- [ ] Phase 7 gate (§7.5) passes against the live backend.
-- [ ] Build with secrets absent → clean no-leaderboard fallback.
+- [ ] Manual QA additions (§8.6) pass.
+- [ ] Phase 7 gate (§8.7) passes against the live backend.
+- [ ] Forged score field ignored; backend-unreachable degrades cleanly.
 
 ---
 
-## 10. Out of scope (deliberate)
+## 11. Out of scope (deliberate)
 
-- Server-side game simulation / replay verification (the only true anti-cheat).
-- Per-user accounts, auth, or persistent identity beyond a typed name.
+- **Bot / TAS detection** — the only cheat re-simulation can't catch (§0). No
+  game has solved it; not attempting it.
+- **Seed-shopping prevention beyond TTL + optional issuance rate-limit** — it's
+  legitimate play on a server seed, a minor residual.
+- Per-user accounts, auth, or identity beyond a typed name.
 - Pagination beyond top-10, search, or regional boards.
-- Editing or deleting submitted scores (no update/delete policy by design).
+- Editing or deleting submitted scores.

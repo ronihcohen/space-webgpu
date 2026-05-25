@@ -201,6 +201,7 @@ function updateSim(
   input: InputState,
   renderer: Renderer,
   audio: AudioManager,
+  autoFireEnabled: boolean,
 ): { sim: SimState; gs: GameState; waveComplete: boolean } {
   let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion, playerFireCooldown } = sim;
   let waveComplete = false;
@@ -250,7 +251,7 @@ function updateSim(
 
   // ── Player fire ─────────────────────────────────────────────────────────────
   if (playerFireCooldown > 0) playerFireCooldown = Math.max(0, playerFireCooldown - DT);
-  if (playerFireCooldown <= 0 && isDown(input, 'Space')) {
+  if (playerFireCooldown <= 0 && (autoFireEnabled || isDown(input, 'Space'))) {
     playerFireCooldown = 0.12; // ~8 shots/sec
     audio.shoot();
     bullets = [
@@ -846,9 +847,12 @@ async function bootstrap(): Promise<void> {
   const input = makeInputState();
   attachInputListeners(input);
 
+  let autoFireEnabled = false;
+
   // ── Touch controls ─────────────────────────────────────────────────────────
   // Buttons write directly into the InputState so the sim sees them identically
-  // to keyboard events. Auto-fire while Fire is held is handled by isDown() in updateSim.
+  // to keyboard events. Auto-fire while Fire is held is handled by isDown(), while
+  // the mobile AUTO button toggles a persistent auto-fire mode.
 
   function touchDown(key: string): void {
     if (!input._held.has(key)) input._pressed.add(key);
@@ -880,6 +884,17 @@ async function bootstrap(): Promise<void> {
   bindTouchBtn('btn-left',  'ArrowLeft');
   bindTouchBtn('btn-right', 'ArrowRight');
   bindTouchBtn('btn-fire',  'Space');
+
+  const btnAutoFire = document.getElementById('btn-auto-fire');
+  if (btnAutoFire) {
+    const onToggle = (e: Event): void => {
+      e.preventDefault();
+      autoFireEnabled = !autoFireEnabled;
+      btnAutoFire.classList.toggle('active', autoFireEnabled);
+      audio.resume();
+    };
+    btnAutoFire.addEventListener('touchstart', onToggle, { passive: false });
+  }
 
   // Pause button maps to P key
   const btnPause = document.getElementById('btn-pause');
@@ -952,7 +967,7 @@ async function bootstrap(): Promise<void> {
       advance(ticks: number) {
         for (let t = 0; t < ticks; t++) {
           if (gs.phase === 'PLAYING') {
-            const result = updateSim(sim, gs, input, renderer, audio);
+            const result = updateSim(sim, gs, input, renderer, audio, false);
             sim = result.sim;
             gs = result.gs;
             if (result.waveComplete) {
@@ -1023,7 +1038,7 @@ async function bootstrap(): Promise<void> {
       } else {
         const prevPhase = gs.phase;
         while (acc >= DT) {
-          const result = updateSim(sim, gs, input, renderer, audio);
+          const result = updateSim(sim, gs, input, renderer, audio, autoFireEnabled);
           sim = result.sim;
           gs = result.gs;
           acc -= DT;
