@@ -22,6 +22,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Claude Code
+.claude/worktrees/
+
 # test output
 coverage/
 playwright-report/
