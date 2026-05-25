@@ -84,6 +84,7 @@ import {
 import {
   makeInputState,
   attachInputListeners,
+  isDown,
   isDownEither,
   wasPressed,
   type InputState,
@@ -245,7 +246,9 @@ function updateSim(
   }
 
   // ── Player fire ─────────────────────────────────────────────────────────────
-  if (wasPressed(input, 'Space')) {
+  // Auto-fire: hold Space to fire continuously; one bullet on screen at a time.
+  const playerBulletActive = bullets.some((b) => b.owner === 'player');
+  if (!playerBulletActive && isDown(input, 'Space')) {
     audio.shoot();
     bullets = [
       ...bullets,
@@ -567,6 +570,9 @@ function buildHudInstances(
   instances: SpriteInstance[],
   gs: GameState,
   player: Player,
+  waveClearTimer: number,
+  waveClearLevel: number,
+  gameOverTimer: number,
 ): void {
   // ── Always-visible score strip ────────────────────────────────────────────
   pushText(instances, 'SCORE', 2, 2);
@@ -585,7 +591,7 @@ function buildHudInstances(
 
   // ── Phase-specific overlays ───────────────────────────────────────────────
   if (gs.phase === 'IDLE') {
-    const title = 'SPACE INVADERS';
+    const title = 'SPACE GPU';
     pushText(instances, title, centeredX(title), 80);
     const prompt = 'PRESS SPACE TO START';
     pushText(instances, prompt, centeredX(prompt), 120);
@@ -597,10 +603,17 @@ function buildHudInstances(
   } else if (gs.phase === 'GAME_OVER') {
     const msg = 'GAME OVER';
     pushText(instances, msg, centeredX(msg), 100);
-    const scoreStr = `SCORE ${String(gs.score).padStart(5, '0')}`;
-    pushText(instances, scoreStr, centeredX(scoreStr), 112);
-    const hint = 'PRESS SPACE TO RETRY';
-    pushText(instances, hint, centeredX(hint), 128);
+    if (gameOverTimer <= 0) {
+      const scoreStr = `SCORE ${String(gs.score).padStart(5, '0')}`;
+      pushText(instances, scoreStr, centeredX(scoreStr), 112);
+      const hint = 'PRESS SPACE TO RETRY';
+      pushText(instances, hint, centeredX(hint), 128);
+    }
+  } else if (gs.phase === 'PLAYING' && waveClearTimer > 0) {
+    const lvlMsg = `LEVEL ${waveClearLevel}`;
+    pushText(instances, lvlMsg, centeredX(lvlMsg), 96);
+    const hardMsg = 'NOW HARDER';
+    pushText(instances, hardMsg, centeredX(hardMsg), 112);
   } else if (gs.phase === 'WIN') {
     const msg = 'STAGE CLEAR';
     pushText(instances, msg, centeredX(msg), 100);
@@ -617,6 +630,9 @@ function buildInstances(
   sim: SimState,
   gs: GameState,
   renderer: Renderer,
+  waveClearTimer: number,
+  waveClearLevel: number,
+  gameOverTimer: number,
 ): SpriteInstance[] {
   const { player, grid, bullets, ufo, invaderExplosion, ufoExplosion } = sim;
   const instances: SpriteInstance[] = [];
@@ -758,7 +774,7 @@ function buildInstances(
   }
 
   // ── HUD + overlays ────────────────────────────────────────────────────────────
-  buildHudInstances(instances, gs, player);
+  buildHudInstances(instances, gs, player, waveClearTimer, waveClearLevel, gameOverTimer);
 
   return instances;
 }
@@ -815,10 +831,7 @@ async function bootstrap(): Promise<void> {
 
   // ── Touch controls ─────────────────────────────────────────────────────────
   // Buttons write directly into the InputState so the sim sees them identically
-  // to keyboard events. Fire auto-repeats every FIRE_REPEAT_TICKS while held.
-  const FIRE_REPEAT_TICKS = 8;
-  let touchFireHeld = false;
-  let touchFireCounter = 0;
+  // to keyboard events. Auto-fire while Fire is held is handled by isDown() in updateSim.
 
   function touchDown(key: string): void {
     if (!input._held.has(key)) input._pressed.add(key);
@@ -835,13 +848,11 @@ async function bootstrap(): Promise<void> {
       e.preventDefault();
       audio.resume(); // iOS requires resume() inside a user gesture
       el.classList.add('active');
-      if (key === 'Space') { touchFireHeld = true; touchFireCounter = 0; }
       touchDown(key);
     };
     const onEnd = (e: Event): void => {
       e.preventDefault();
       el.classList.remove('active');
-      if (key === 'Space') touchFireHeld = false;
       touchUp(key);
     };
     el.addEventListener('touchstart',  onStart, { passive: false });
@@ -853,6 +864,24 @@ async function bootstrap(): Promise<void> {
   bindTouchBtn('btn-right', 'ArrowRight');
   bindTouchBtn('btn-fire',  'Space');
 
+  // Pause button maps to P key
+  const btnPause = document.getElementById('btn-pause');
+  if (btnPause) {
+    const onPauseStart = (e: Event): void => {
+      e.preventDefault();
+      btnPause.classList.add('active');
+      touchDown('KeyP');
+    };
+    const onPauseEnd = (e: Event): void => {
+      e.preventDefault();
+      btnPause.classList.remove('active');
+      touchUp('KeyP');
+    };
+    btnPause.addEventListener('touchstart',  onPauseStart, { passive: false });
+    btnPause.addEventListener('touchend',    onPauseEnd,   { passive: false });
+    btnPause.addEventListener('touchcancel', onPauseEnd,   { passive: false });
+  }
+
   // ── Auto-pause on blur + visibilitychange ──────────────────────────────────
   window.addEventListener('blur', () => { gs = autoPause(gs); });
   document.addEventListener('visibilitychange', () => {
@@ -862,6 +891,10 @@ async function bootstrap(): Promise<void> {
   // ── Game state ─────────────────────────────────────────────────────────────
   let gs: GameState = makeGameState();
   let sim: SimState = makeSim(gs.wave);
+  let waveClearTimer = 0;
+  let waveClearLevel = 1;
+  let wavePendingLives = 3;
+  let gameOverTimer = 0;
 
   // Upload initial barrier masks to the renderer
   for (let i = 0; i < 4; i++) {
@@ -925,6 +958,8 @@ async function bootstrap(): Promise<void> {
     lastTime = now;
     acc = Math.min(acc + rawDt, MAX_FRAME);
 
+    if (gameOverTimer > 0) gameOverTimer = Math.max(0, gameOverTimer - rawDt);
+
     // Handle state transitions via input.
     // IMPORTANT: wasPressed() is destructive — it consumes the event on first read.
     // Only consume keys here for state machine transitions; leave Space unconsumed
@@ -945,45 +980,53 @@ async function bootstrap(): Promise<void> {
       // Space is NOT consumed here — updateSim reads it for firing
       if (pPressed) gs = togglePause(gs);
     } else if (gs.phase === 'PAUSED') {
-      // Consume Space (no-op while paused, but prevent accumulation)
-      wasPressed(input, 'Space');
-      if (pPressed) gs = togglePause(gs);
+      // Space also unpauses on mobile (no P key available); it's consumed here so no bullet fires
+      const spacePressed = wasPressed(input, 'Space');
+      if (spacePressed || pPressed) gs = togglePause(gs);
     } else if (gs.phase === 'GAME_OVER') {
       const spacePressed = wasPressed(input, 'Space');
-      if (spacePressed || pPressed) {
+      if (gameOverTimer <= 0 && (spacePressed || pPressed)) {
         gs = returnToIdle(gs);
       }
     }
 
     // Run simulation ticks
     if (gs.phase === 'PLAYING') {
-      // Auto-repeat fire while touch fire button is held
-      if (touchFireHeld) {
-        touchFireCounter++;
-        if (touchFireCounter >= FIRE_REPEAT_TICKS) {
-          input._pressed.add('Space');
-          touchFireCounter = 0;
-        }
-      }
-
-      while (acc >= DT) {
-        const result = updateSim(sim, gs, input, renderer, audio);
-        sim = result.sim;
-        gs = result.gs;
-        acc -= DT;
-
-        if (result.waveComplete) {
-          audio.ufoStop();
-          const prevLives = sim.player.lives;
-          gs = advanceWave(gs); // stay PLAYING, increment wave + level
+      if (waveClearTimer > 0) {
+        // Wave-clear interstitial: freeze sim, count down
+        waveClearTimer = Math.max(0, waveClearTimer - rawDt);
+        if (waveClearTimer <= 0) {
           sim = makeSim(gs.wave);
-          sim = { ...sim, player: { ...sim.player, lives: prevLives } };
+          sim = { ...sim, player: { ...sim.player, lives: wavePendingLives } };
           for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
-          break;
+          input._pressed.delete('Space'); // don't fire immediately on wave start
+          acc = 0;
         }
-        if (gs.phase !== 'PLAYING') {
-          audio.ufoStop(); // Ensure UFO sound stops on game over
-          break;
+      } else {
+        const prevPhase = gs.phase;
+        while (acc >= DT) {
+          const result = updateSim(sim, gs, input, renderer, audio);
+          sim = result.sim;
+          gs = result.gs;
+          acc -= DT;
+
+          if (result.waveComplete) {
+            audio.ufoStop();
+            wavePendingLives = sim.player.lives;
+            gs = advanceWave(gs);
+            waveClearLevel = gs.level;
+            waveClearTimer = 3.0;
+            sim = { ...sim, bullets: [] };
+            break;
+          }
+          if (gs.phase !== 'PLAYING') {
+            audio.ufoStop();
+            break;
+          }
+        }
+
+        if (prevPhase === 'PLAYING' && gs.phase === 'GAME_OVER') {
+          gameOverTimer = 2.5;
         }
       }
     } else {
@@ -992,7 +1035,7 @@ async function bootstrap(): Promise<void> {
 
     // Render
     const time = (now - startTime) / 1000;
-    const instances = buildInstances(sim, gs, renderer);
+    const instances = buildInstances(sim, gs, renderer, waveClearTimer, waveClearLevel, gameOverTimer);
     renderer.draw(instances, time);
 
     requestAnimationFrame(frame);

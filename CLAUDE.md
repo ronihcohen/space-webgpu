@@ -439,3 +439,9 @@ As a rough floor: recent Chrome / Edge work everywhere; Safari and Firefox lag a
 - Multiplayer
 - Mobile-portrait layout
 - Asset hot-reload (Vite handles JS/TS HMR; shaders and PNG require a manual refresh)
+
+---
+
+## Leaderboard (Planned — Phase 7)
+
+The full Phase 7 plan lives in **[LEADERBOARD.md](./LEADERBOARD.md)** — Supabase schema, server-anchored anti-cheat design, client library, UX flow, deployment, and the implementation checklist.
