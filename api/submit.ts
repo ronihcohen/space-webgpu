@@ -78,7 +78,9 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
       from leaderboard
       where score > ${score}
     `;
-    res.status(200).json({ status: 'already-submitted', rank: rankRows.rows[0]?.rank ?? 0 });
+    const rank = rankRows.rows[0]?.rank ?? 0;
+    console.log('[submit] duplicate seed, rank:', rank);
+    res.status(200).json({ status: 'already-submitted', rank });
     return;
   }
 
@@ -91,5 +93,11 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
     from leaderboard
     where score > ${score}
   `;
-  res.status(200).json({ rank: rankRows.rows[0]?.rank ?? 0 });
+  const topRows = await sql`
+    select name, score from leaderboard order by score desc limit 15
+  `;
+  const rank = rankRows.rows[0]?.rank ?? 0;
+  console.log('[submit] inserted score:', score, 'rank:', rank);
+  console.log('[submit] top 15:', topRows.rows.map((r: { name: string; score: number }) => `${r.name}:${r.score}`).join(', '));
+  res.status(200).json({ rank });
 }

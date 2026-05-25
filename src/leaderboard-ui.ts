@@ -128,6 +128,7 @@ export function showLeaderboardOverlay(options: ShowOptions): void {
         await loadRows(list, status);
         status.textContent = rankMsg;
       } catch (err) {
+        console.error('[leaderboard] submit error:', err);
         const kind = err instanceof LeaderboardError ? err.kind : 'server';
         status.textContent = kind === 'offline'
           ? "You're offline. Score not submitted."
