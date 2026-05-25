@@ -64,7 +64,9 @@ export function framesPerStep(alive: number): number {
  * the full table still applies as invaders die.
  */
 export function startFrames(waveN: number): number {
-  return Math.max(24 - 5 * (waveN - 1), 4);
+  // Per test/spec: each wave subtracts 3 frames from the 24-frame baseline,
+  // floored at 8: startFrames = max(24 - 3*(N-1), 8)
+  return Math.max(24 - 3 * (waveN - 1), 8);
 }
 
 /**
