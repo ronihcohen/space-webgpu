@@ -336,6 +336,13 @@ describe('level does not reset on life loss', () => {
     expect(s.level).toBe(2); // level stays 2 after wave clear
   });
 
+  it('triggerGameOver resets level to 1', () => {
+    let s = inPhase('PLAYING');
+    s = advanceWave(s); // level → 2
+    s = triggerGameOver(s);
+    expect(s.level).toBe(1);
+  });
+
   it('startGame resets level to 1 for a new game', () => {
     let s = inPhase('PLAYING');
     s = advanceWave(s); // level → 2

@@ -86,7 +86,7 @@ export function triggerGameOver(state: GameState): GameState {
   if (highScore > state.highScore) {
     saveHighScore(highScore);
   }
-  return { ...state, phase: 'GAME_OVER', highScore };
+  return { ...state, phase: 'GAME_OVER', highScore, level: 1 };
 }
 
 /**
