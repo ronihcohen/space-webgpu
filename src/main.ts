@@ -84,10 +84,8 @@ import {
 import {
   makeInputState,
   attachInputListeners,
-  drainInputEdges,
   isDown,
   isDownEither,
-  recordInputEdgeForCode,
   wasPressed,
   type InputState,
 } from './game/input';
@@ -872,11 +870,8 @@ async function bootstrap(): Promise<void> {
     const run = pendingRun;
     const seed = seedFrom(run ? run.seed : randomLocalSeed());
     rng = makeRng(seed);
-    gs = startGame(gs, seed);
+    gs = startGame(gs);
     gs = { ...gs, run };
-    if (autoFireEnabled) {
-      gs.inputLog.push({ tick: 0, key: 2, down: true });
-    }
     sim = makeSim(gs.wave, rng);
     for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
     pendingRun = null;
@@ -890,12 +885,10 @@ async function bootstrap(): Promise<void> {
   function touchDown(key: string): void {
     if (!input._enabled) return;
     if (!input._held.has(key)) input._pressed.add(key);
-    if (!input._held.has(key)) recordInputEdgeForCode(input, key, true);
     input._held.add(key);
   }
   function touchUp(key: string): void {
     if (!input._enabled) return;
-    if (input._held.has(key)) recordInputEdgeForCode(input, key, false);
     input._held.delete(key);
   }
 
@@ -1067,14 +1060,9 @@ async function bootstrap(): Promise<void> {
       } else {
         const prevPhase = gs.phase;
         while (acc >= DT) {
-          const edges = drainInputEdges(input);
-          for (const edge of edges) {
-            gs.inputLog.push({ tick: gs.tick, ...edge });
-          }
           const result = updateSim(sim, gs, input, renderer, audio, autoFireEnabled, rng);
           sim = result.sim;
           gs = result.gs;
-          gs = { ...gs, tick: gs.tick + 1 };
           acc -= DT;
 
           if (result.waveComplete) {
@@ -1099,11 +1087,9 @@ async function bootstrap(): Promise<void> {
             leaderboardOpen = true;
             const score = gs.score;
             const run = gs.run;
-            const inputLog = [...gs.inputLog];
             showLeaderboardOverlay({
               score,
               run,
-              inputLog,
               input,
               onPlayAgain: () => {
                 gs = returnToIdle(gs);

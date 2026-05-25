@@ -5,7 +5,6 @@ import {
   LeaderboardError,
   loadSavedLeaderboardName,
   saveLeaderboardName,
-  type InputEvent,
   type LeaderboardRow,
   type SignedSeed,
 } from './leaderboard';
@@ -14,7 +13,6 @@ import { setInputEnabled, type InputState } from './game/input';
 interface ShowOptions {
   score: number;
   run: SignedSeed | null;
-  inputLog: InputEvent[];
   input: InputState;
   onPlayAgain(): void;
 }
@@ -124,7 +122,7 @@ export function showLeaderboardOverlay(options: ShowOptions): void {
       button.disabled = true;
       status.textContent = 'Verifying...';
       try {
-        const result = await submitRun(run, name, options.inputLog);
+        const result = await submitRun(run, name, options.score);
         const rankMsg = result.rank > 0 ? `Submitted! You ranked #${result.rank}.` : 'Submitted!';
         form.remove();
         await loadRows(list, status);
