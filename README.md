@@ -1,4 +1,4 @@
-# Space Invaders — WebGPU
+# Space GPU
 
 A browser-based Space Invaders clone rendered entirely with the WebGPU API.
 No Canvas 2D. No WebGL.
