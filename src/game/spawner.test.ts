@@ -97,18 +97,17 @@ describe('makeInvaderGrid', () => {
 // ─── Speed table — framesPerStep ──────────────────────────────────────────────
 
 describe('framesPerStep', () => {
-  // Table from CLAUDE.md: [minAlive, framesPerStep]
   const TABLE: Array<[number, number]> = [
-    [55, 48],
-    [54, 43], [43, 43],  // 54-43 → 43
-    [42, 37], [31, 37],  // 42-31 → 37
-    [30, 30], [22, 30],  // 30-22 → 30
-    [21, 22], [16, 22],  // 21-16 → 22
-    [15, 16], [11, 16],  // 15-11 → 16
-    [10, 11], [ 8, 11],  // 10-8  → 11
-    [ 7,  8], [ 5,  8],  // 7-5   → 8
-    [ 4,  5],            // 4     → 5
-    [ 3,  3],            // 3     → 3
+    [55, 24],
+    [54, 21], [43, 21],  // 54-43 → 21
+    [42, 18], [31, 18],  // 42-31 → 18
+    [30, 15], [22, 15],  // 30-22 → 15
+    [21, 11], [16, 11],  // 21-16 → 11
+    [15,  8], [11,  8],  // 15-11 → 8
+    [10,  6], [ 8,  6],  // 10-8  → 6
+    [ 7,  4], [ 5,  4],  // 7-5   → 4
+    [ 4,  3],            // 4     → 3
+    [ 3,  2],            // 3     → 2
     [ 2,  2],            // 2     → 2
     [ 1,  1],            // 1     → 1
   ];
@@ -120,23 +119,22 @@ describe('framesPerStep', () => {
   }
 
   it('framesPerStep at every boundary of the table matches spec', () => {
-    // Spot-check the exact values at boundary transitions
-    expect(framesPerStep(55)).toBe(48);
-    expect(framesPerStep(43)).toBe(43); // boundary: 43 alive = 43 fps
-    expect(framesPerStep(42)).toBe(37); // just below → next tier
-    expect(framesPerStep(31)).toBe(37);
-    expect(framesPerStep(30)).toBe(30);
-    expect(framesPerStep(22)).toBe(30);
-    expect(framesPerStep(21)).toBe(22);
-    expect(framesPerStep(16)).toBe(22);
-    expect(framesPerStep(15)).toBe(16);
-    expect(framesPerStep(11)).toBe(16);
-    expect(framesPerStep(10)).toBe(11);
-    expect(framesPerStep(8)).toBe(11);
-    expect(framesPerStep(7)).toBe(8);
-    expect(framesPerStep(5)).toBe(8);
-    expect(framesPerStep(4)).toBe(5);
-    expect(framesPerStep(3)).toBe(3);
+    expect(framesPerStep(55)).toBe(24);
+    expect(framesPerStep(43)).toBe(21);
+    expect(framesPerStep(42)).toBe(18);
+    expect(framesPerStep(31)).toBe(18);
+    expect(framesPerStep(30)).toBe(15);
+    expect(framesPerStep(22)).toBe(15);
+    expect(framesPerStep(21)).toBe(11);
+    expect(framesPerStep(16)).toBe(11);
+    expect(framesPerStep(15)).toBe(8);
+    expect(framesPerStep(11)).toBe(8);
+    expect(framesPerStep(10)).toBe(6);
+    expect(framesPerStep(8)).toBe(6);
+    expect(framesPerStep(7)).toBe(4);
+    expect(framesPerStep(5)).toBe(4);
+    expect(framesPerStep(4)).toBe(3);
+    expect(framesPerStep(3)).toBe(2);
     expect(framesPerStep(2)).toBe(2);
     expect(framesPerStep(1)).toBe(1);
   });
@@ -145,44 +143,39 @@ describe('framesPerStep', () => {
 // ─── startFrames ──────────────────────────────────────────────────────────────
 
 describe('startFrames', () => {
-  it('wave 1 = 48 (max(48 - 5*0, 16) = 48)', () => {
-    expect(startFrames(1)).toBe(48);
+  it('wave 1 = 24 (max(24 - 3*0, 8) = 24)', () => {
+    expect(startFrames(1)).toBe(24);
   });
 
-  it('wave 2 = 43 (max(48 - 5*1, 16) = 43)', () => {
-    expect(startFrames(2)).toBe(43);
+  it('wave 2 = 21 (max(24 - 3*1, 8) = 21)', () => {
+    expect(startFrames(2)).toBe(21);
   });
 
-  it('wave 3 = 38 (max(48 - 5*2, 16) = 38)', () => {
-    expect(startFrames(3)).toBe(38);
+  it('wave 3 = 18 (max(24 - 3*2, 8) = 18)', () => {
+    expect(startFrames(3)).toBe(18);
   });
 
-  it('wave 4 = 33 (max(48 - 5*3, 16) = 33)', () => {
-    expect(startFrames(4)).toBe(33);
+  it('wave 4 = 15 (max(24 - 3*3, 8) = 15)', () => {
+    expect(startFrames(4)).toBe(15);
   });
 
-  it('wave 5 = 28 (max(48 - 5*4, 16) = 28)', () => {
-    expect(startFrames(5)).toBe(28);
+  it('wave 5 = 12 (max(24 - 3*4, 8) = 12)', () => {
+    expect(startFrames(5)).toBe(12);
   });
 
-  it('wave 6 = 23 (max(48 - 5*5, 16) = 23)', () => {
-    expect(startFrames(6)).toBe(23);
+  it('wave 6 = 9 (max(24 - 3*5, 8) = 9)', () => {
+    expect(startFrames(6)).toBe(9);
   });
 
-  it('wave 7 = 18 (max(48 - 5*6, 16) = 18)', () => {
-    expect(startFrames(7)).toBe(18);
+  it('floors at 8 — never goes below', () => {
+    expect(startFrames(7)).toBe(8);
+    expect(startFrames(8)).toBe(8);
+    expect(startFrames(100)).toBe(8);
   });
 
-  it('floors at 16 — never goes below', () => {
-    // wave 8: 48 - 5*7 = 13 → clamped to 16
-    expect(startFrames(8)).toBe(16);
-    expect(startFrames(9)).toBe(16);
-    expect(startFrames(100)).toBe(16);
-  });
-
-  it('matches formula max(48 - 5*(N-1), 16) for N=1..6', () => {
+  it('matches formula max(24 - 3*(N-1), 8) for N=1..6', () => {
     for (let n = 1; n <= 6; n++) {
-      expect(startFrames(n)).toBe(Math.max(48 - 5 * (n - 1), 16));
+      expect(startFrames(n)).toBe(Math.max(24 - 3 * (n - 1), 8));
     }
   });
 });

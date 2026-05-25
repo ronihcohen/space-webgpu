@@ -30,16 +30,16 @@ export const GRID_ROWS = 5;
  * Table is sorted descending so the first matching entry wins.
  */
 const SPEED_TABLE: ReadonlyArray<[number, number]> = [
-  [55, 48],
-  [43, 43],
-  [31, 37],
-  [22, 30],
-  [16, 22],
-  [11, 16],
-  [ 8, 11],
-  [ 5,  8],
-  [ 4,  5],
-  [ 3,  3],
+  [55, 24],
+  [43, 21],
+  [31, 18],
+  [22, 15],
+  [16, 11],
+  [11,  8],
+  [ 8,  6],
+  [ 5,  4],
+  [ 4,  3],
+  [ 3,  2],
   [ 2,  2],
   [ 1,  1],
 ];
@@ -64,7 +64,7 @@ export function framesPerStep(alive: number): number {
  * the full table still applies as invaders die.
  */
 export function startFrames(waveN: number): number {
-  return Math.max(48 - 5 * (waveN - 1), 16);
+  return Math.max(24 - 3 * (waveN - 1), 8);
 }
 
 /**
@@ -74,7 +74,7 @@ export function startFrames(waveN: number): number {
  * even with a full grid of 55 invaders.
  */
 export function levelSpeedCap(level: number): number {
-  return Math.max(48 - 8 * (level - 1), 6);
+  return Math.max(24 - 4 * (level - 1), 3);
 }
 
 // ─── Wave start row drop ──────────────────────────────────────────────────────
