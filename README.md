@@ -3,6 +3,8 @@
 A browser-based Space Invaders clone rendered entirely with the WebGPU API.
 No Canvas 2D. No WebGL.
 
+**[Play the live demo](https://ronihcohen.github.io/space-webgpu/)**
+
 See [CLAUDE.md](./CLAUDE.md) for full architecture, game logic, and implementation phases.
 
 ---
@@ -135,18 +137,8 @@ called from the keydown handler that transitions `IDLE → PLAYING`.
 
 ### Assets source and license
 
-**sprites.png is currently a generated placeholder** — colored
-rectangles at the correct pixel positions, valid for Phase 2 UV
-verification.  Replace with real art before Phase 5.
-
-When sourcing final art and audio, document the license here.
-Acceptable licenses: CC0, CC BY (attribution required), or original
-work.  Do not ship art or audio under CC BY-NC or GPL without legal review.
-
-Candidate sources for CC0 arcade assets:
-- OpenGameArt.org (filter by CC0)
-- itch.io free asset packs
-- Hand-pixel-art using Aseprite — original work, no license concerns
+All sprites and audio assets were created from scratch — original work,
+no third-party licensing concerns.
 
 ---
 

@@ -119,6 +119,8 @@ interface SimState {
   invaderStepNote: number;
   /** true = an invader explosion is showing; tracks which invader */
   invaderExplosion: { col: number; row: number; timer: number } | null;
+  /** UFO explosion + score popup after being shot */
+  ufoExplosion: { x: number; scoreValue: number; timer: number } | null;
 }
 
 function makePlayer(): Player {
@@ -155,6 +157,7 @@ function makeSim(waveN: number): SimState {
     gridStepAccum: 0,
     invaderStepNote: 0,
     invaderExplosion: null,
+    ufoExplosion: null,
   };
 }
 
@@ -194,7 +197,7 @@ function updateSim(
   renderer: Renderer,
   audio: AudioManager,
 ): { sim: SimState; gs: GameState; waveComplete: boolean } {
-  let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion } = sim;
+  let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion } = sim;
   let waveComplete = false;
 
   // ── Player explosion / respawn ──────────────────────────────────────────────
@@ -219,7 +222,7 @@ function updateSim(
     }
     // Freeze movement and firing while exploding
     return {
-      sim: { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion },
+      sim: { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion },
       gs,
       waveComplete,
     };
@@ -351,6 +354,14 @@ function updateSim(
     }
   }
 
+  // ── UFO explosion timer ──────────────────────────────────────────────────────
+  if (ufoExplosion !== null) {
+    ufoExplosion = { ...ufoExplosion, timer: ufoExplosion.timer - DT };
+    if (ufoExplosion.timer <= 0) {
+      ufoExplosion = null;
+    }
+  }
+
   // ── UFO spawn and movement ──────────────────────────────────────────────────
   if (!ufo.active) {
     const newTimer = ufo.spawnTimer - DT;
@@ -419,12 +430,14 @@ function updateSim(
       if (deadBulletIndices.has(bi)) continue;
       if (aabbOverlap(ufoRect, bulletRect(b))) {
         const scoreIdx = Math.floor(Math.random() * UFO_SCORE_VALUES.length);
-        gs = addScore(gs, UFO_SCORE_VALUES[scoreIdx]);
+        const scoreValue = UFO_SCORE_VALUES[scoreIdx];
+        gs = addScore(gs, scoreValue);
         ufo = {
           ...ufo,
           active: false,
           spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
         };
+        ufoExplosion = { x: ufo.x, scoreValue, timer: 1.0 };
         deadBulletIndices.add(bi);
         audio.ufoHit();
         break;
@@ -509,7 +522,7 @@ function updateSim(
   }
 
   return {
-    sim: { player, grid, bullets, barriers: updatedBarriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion },
+    sim: { player, grid, bullets, barriers: updatedBarriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion },
     gs,
     waveComplete,
   };
@@ -602,7 +615,7 @@ function buildInstances(
   gs: GameState,
   renderer: Renderer,
 ): SpriteInstance[] {
-  const { player, grid, bullets, ufo, invaderExplosion } = sim;
+  const { player, grid, bullets, ufo, invaderExplosion, ufoExplosion } = sim;
   const instances: SpriteInstance[] = [];
 
   // ── Player ──────────────────────────────────────────────────────────────────
@@ -721,6 +734,24 @@ function buildInstances(
       atlasW: UV_UFO[2],
       atlasH: UV_UFO[3],
     });
+  }
+
+  // ── UFO explosion + score popup ───────────────────────────────────────────────
+  if (ufoExplosion !== null) {
+    const sz = SPRITE_SIZES.invaderExplosion;
+    instances.push({
+      x: ufoExplosion.x - sz.w / 2,
+      y: UFO_Y - sz.h / 2,
+      w: sz.w,
+      h: sz.h,
+      atlasU: UV_INVADER_EXPLOSION[0],
+      atlasV: UV_INVADER_EXPLOSION[1],
+      atlasW: UV_INVADER_EXPLOSION[2],
+      atlasH: UV_INVADER_EXPLOSION[3],
+    });
+    const scoreStr = String(ufoExplosion.scoreValue);
+    const scoreX = Math.max(0, Math.min(PLAYFIELD_W - scoreStr.length * FONT_CELL_W, ufoExplosion.x - (scoreStr.length * FONT_CELL_W) / 2));
+    pushText(instances, scoreStr, scoreX, UFO_Y + sz.h / 2 + 2);
   }
 
   // ── HUD + overlays ────────────────────────────────────────────────────────────
