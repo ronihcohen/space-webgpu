@@ -101,6 +101,10 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+  // Sentinel: atlasU < 0 means "solid black quad" (used for text backgrounds).
+  if in.uv.x < 0.0 {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  }
   let color = textureSample(atlasTex, atlasSampler, in.uv);
   // Discard fully-transparent pixels so sprites don't overwrite each other's
   // transparent regions (important for non-rectangular sprite silhouettes).

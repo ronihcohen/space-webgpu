@@ -538,6 +538,8 @@ function pushText(
   x: number,
   y: number,
 ): void {
+  // Black background rect behind the full string (atlasU = -1 triggers solid-black path in shader)
+  instances.push({ x, y, w: text.length * FONT_CELL_W, h: FONT_CELL_H, atlasU: -1, atlasV: -1, atlasW: 0, atlasH: 0 });
   const uvs = uvForString(text);
   for (let i = 0; i < uvs.length; i++) {
     const uv = uvs[i];
