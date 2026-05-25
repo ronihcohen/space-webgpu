@@ -88,11 +88,27 @@
         border-color: rgba(0,255,0,0.9);
         background: rgba(0,255,0,0.12);
       }
+      #btn-pause {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        width: 44px;
+        height: 44px;
+        font-size: 1rem;
+        border-color: rgba(0,255,0,0.4);
+        background: rgba(0,255,0,0.06);
+        display: none;
+      }
+      @media (pointer: coarse) {
+        #btn-pause { display: flex; }
+      }
     </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
     <div id="error-overlay"></div>
+
+    <button id="btn-pause" class="touch-btn" aria-label="Pause">&#9646;&#9646;</button>
 
     <div id="touch-controls">
       <div class="touch-group">
@@ -100,7 +116,6 @@
         <button id="btn-right" class="touch-btn" aria-label="Move right">&#9654;</button>
       </div>
       <div class="touch-group">
-        <button id="btn-pause" class="touch-btn" aria-label="Pause">&#9646;&#9646;</button>
         <button id="btn-fire"  class="touch-btn" aria-label="Fire">FIRE</button>
       </div>
     </div>
