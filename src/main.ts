@@ -847,14 +847,15 @@ async function bootstrap(): Promise<void> {
   const input = makeInputState();
   attachInputListeners(input);
 
-  let autoFireEnabled = false;
+  const mobileTouch = window.matchMedia('(pointer: coarse)').matches;
+  let autoFireEnabled = mobileTouch;
   let gs: GameState;
   let sim: SimState;
 
   // ── Touch controls ─────────────────────────────────────────────────────────
   // Buttons write directly into the InputState so the sim sees them identically
-  // to keyboard events. Auto-fire while Fire is held is handled by isDown(), while
-  // the mobile AUTO button toggles a persistent auto-fire mode.
+  // to keyboard events. Auto-fire is enabled by default on mobile, and the START
+  // button maps to Space so it also begins play from IDLE.
 
   function touchDown(key: string): void {
     if (!input._held.has(key)) input._pressed.add(key);
@@ -885,23 +886,7 @@ async function bootstrap(): Promise<void> {
 
   bindTouchBtn('btn-left',  'ArrowLeft');
   bindTouchBtn('btn-right', 'ArrowRight');
-
-  const btnAutoFire = document.getElementById('btn-auto-fire');
-  if (btnAutoFire) {
-    const onToggle = (e: Event): void => {
-      e.preventDefault();
-      audio.resume();
-      autoFireEnabled = !autoFireEnabled;
-      btnAutoFire.classList.toggle('active', autoFireEnabled);
-      if (!autoFireEnabled) {
-        touchUp('Space');
-      } else if (gs.phase === 'IDLE') {
-        input._pressed.add('Space');
-        input._held.add('Space');
-      }
-    };
-    btnAutoFire.addEventListener('touchstart', onToggle, { passive: false });
-  }
+  bindTouchBtn('btn-start', 'Space');
 
   // Pause button maps to P key
   const btnPause = document.getElementById('btn-pause');
