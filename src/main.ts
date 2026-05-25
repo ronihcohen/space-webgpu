@@ -244,8 +244,7 @@ function updateSim(
   }
 
   // ── Player fire ─────────────────────────────────────────────────────────────
-  const playerBulletExists = bullets.some((b) => b.owner === 'player');
-  if (wasPressed(input, 'Space') && !playerBulletExists) {
+  if (wasPressed(input, 'Space')) {
     audio.shoot();
     bullets = [
       ...bullets,
@@ -471,8 +470,6 @@ function updateSim(
             explodeTimer: EXPLOSION_FRAME_DURATION,
           };
         }
-        // Clear all player bullets on hit
-        bullets = bullets.filter((b2) => b2.owner !== 'player');
         break;
       }
     }
