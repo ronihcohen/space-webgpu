@@ -222,7 +222,7 @@ trimming, reject empty. Same constraints as the DB CHECK (defence in depth).
 
 ```ts
 function sanitiseName(raw: string): string | null {
-  const cleaned = raw.replace(/[ -]/g, '').trim().slice(0, 20);
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 20);
   return cleaned.length >= 1 ? cleaned : null;
 }
 ```
