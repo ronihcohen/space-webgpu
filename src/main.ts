@@ -848,6 +848,8 @@ async function bootstrap(): Promise<void> {
   attachInputListeners(input);
 
   let autoFireEnabled = false;
+  let gs: GameState;
+  let sim: SimState;
 
   // ── Touch controls ─────────────────────────────────────────────────────────
   // Buttons write directly into the InputState so the sim sees them identically
@@ -883,15 +885,20 @@ async function bootstrap(): Promise<void> {
 
   bindTouchBtn('btn-left',  'ArrowLeft');
   bindTouchBtn('btn-right', 'ArrowRight');
-  bindTouchBtn('btn-fire',  'Space');
 
   const btnAutoFire = document.getElementById('btn-auto-fire');
   if (btnAutoFire) {
     const onToggle = (e: Event): void => {
       e.preventDefault();
+      audio.resume();
       autoFireEnabled = !autoFireEnabled;
       btnAutoFire.classList.toggle('active', autoFireEnabled);
-      audio.resume();
+      if (!autoFireEnabled) {
+        touchUp('Space');
+      } else if (gs.phase === 'IDLE') {
+        input._pressed.add('Space');
+        input._held.add('Space');
+      }
     };
     btnAutoFire.addEventListener('touchstart', onToggle, { passive: false });
   }
@@ -921,8 +928,8 @@ async function bootstrap(): Promise<void> {
   });
 
   // ── Game state ─────────────────────────────────────────────────────────────
-  let gs: GameState = makeGameState();
-  let sim: SimState = makeSim(gs.wave);
+  gs = makeGameState();
+  sim = makeSim(gs.wave);
   let waveClearTimer = 0;
   let waveClearLevel = 1;
   let waveClearPhrase = WAVE_CLEAR_PHRASES[0];
