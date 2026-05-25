@@ -1,15 +1,12 @@
-import type { InputEvent } from './game/replay';
-
 const API = '/api';
 const LEADERBOARD_NAME_KEY = 'space-webgpu-leaderboard-name';
+const MAX_SCORE = 999999;
 
 export interface SignedSeed {
   seed: string;
   issuedAt: number;
   sig: string;
 }
-
-export type { InputEvent };
 
 export interface LeaderboardRow {
   id: number;
@@ -56,19 +53,20 @@ export async function startRun(): Promise<SignedSeed | null> {
 export async function submitRun(
   run: SignedSeed,
   name: string,
-  inputLog: InputEvent[],
+  score: number,
 ): Promise<{ rank: number }> {
   const cleaned = sanitiseName(name);
   if (cleaned === null) {
     throw new LeaderboardError('rejected', 'bad-name');
   }
+  const safeScore = Math.max(0, Math.min(MAX_SCORE, Math.floor(Number.isFinite(score) ? score : 0)));
 
   let response: Response;
   try {
     response = await fetch(`${API}/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...run, name: cleaned, inputLog }),
+      body: JSON.stringify({ ...run, name: cleaned, score: safeScore }),
     });
   } catch {
     throw new LeaderboardError('offline', 'Network unavailable.');

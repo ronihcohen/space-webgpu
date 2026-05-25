@@ -1,42 +1,26 @@
 import { sql } from './_lib/db.js';
 import { verifySeed } from './_lib/sign.js';
-import { sanitiseName, type InputEvent } from '../src/leaderboard.js';
-import { seedFrom } from '../src/game/rng.js';
-import { simulate } from '../src/game/simulate.js';
+import { sanitiseName } from '../src/leaderboard.js';
 
 interface SubmitBody {
   seed?: unknown;
   issuedAt?: unknown;
   sig?: unknown;
   name?: unknown;
-  inputLog?: unknown;
+  score?: unknown;
 }
+
+const MAX_SCORE = 999999;
 
 function bad(res: { status(code: number): { json(value: unknown): void } }, error: string): void {
   res.status(400).json({ error });
 }
 
-function validInputLog(value: unknown): InputEvent[] | null {
-  if (!Array.isArray(value) || value.length > 20000) return null;
-  const events: InputEvent[] = [];
-  let prevTick = -1;
-  for (const raw of value) {
-    if (typeof raw !== 'object' || raw === null) return null;
-    const event = raw as Record<string, unknown>;
-    if (
-      typeof event.tick !== 'number' ||
-      !Number.isInteger(event.tick) ||
-      event.tick < 0 ||
-      event.tick < prevTick ||
-      (event.key !== 0 && event.key !== 1 && event.key !== 2) ||
-      typeof event.down !== 'boolean'
-    ) {
-      return null;
-    }
-    prevTick = event.tick;
-    events.push({ tick: event.tick, key: event.key, down: event.down });
-  }
-  return events;
+function validScore(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const score = Math.floor(value);
+  if (score < 0 || score > MAX_SCORE) return null;
+  return score;
 }
 
 export default async function handler(req: { method?: string; body?: SubmitBody }, res: {
@@ -57,26 +41,28 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
     return;
   }
 
+  // The signed seed proves the submission carries a token this server issued
+  // recently (HMAC + TTL), and the submissions table makes it single-use. That
+  // is the whole anti-abuse story now: we trust the client's reported score
+  // rather than re-deriving it from a replay. Re-deriving meant maintaining a
+  // second, byte-identical copy of the game simulation on the server; any drift
+  // between it and the live game saved a different score than the player saw.
+  // Trusting the client is less cheat-proof but makes the saved score exactly
+  // the score the player earned.
   if (!verifySeed({ seed: body.seed, issuedAt: body.issuedAt, sig: body.sig })) {
     bad(res, 'bad-seed');
     return;
   }
 
-  const inputLog = validInputLog(body.inputLog);
-  if (inputLog === null) {
-    bad(res, 'bad-input-log');
+  const score = validScore(body.score);
+  if (score === null) {
+    bad(res, 'bad-score');
     return;
   }
 
   const name = typeof body.name === 'string' ? sanitiseName(body.name) : null;
   if (name === null) {
     bad(res, 'bad-name');
-    return;
-  }
-
-  const replay = simulate(seedFrom(body.seed), inputLog);
-  if (replay.ended !== 'GAME_OVER' && replay.ended !== 'WIN') {
-    bad(res, 'not-terminal');
     return;
   }
 
@@ -90,7 +76,7 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
     const rankRows = await sql`
       select count(*)::int + 1 as rank
       from leaderboard
-      where score > ${replay.score}
+      where score > ${score}
     `;
     res.status(200).json({ status: 'already-submitted', rank: rankRows.rows[0]?.rank ?? 0 });
     return;
@@ -98,12 +84,12 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
 
   await sql`
     insert into leaderboard (name, score)
-    values (${name}, ${replay.score})
+    values (${name}, ${score})
   `;
   const rankRows = await sql`
     select count(*)::int + 1 as rank
     from leaderboard
-    where score > ${replay.score}
+    where score > ${score}
   `;
   res.status(200).json({ rank: rankRows.rows[0]?.rank ?? 0 });
 }

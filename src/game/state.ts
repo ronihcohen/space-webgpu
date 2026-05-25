@@ -29,12 +29,6 @@ export interface GameState {
   wave: number;
   /** Current difficulty level. Increments on each screen clear, resets to 1 on player death. */
   level: number;
-  /** Deterministic RNG seed for the active run. */
-  seed: number;
-  /** Fixed-step tick counter for the active run. */
-  tick: number;
-  /** Tick-indexed input edges consumed by the simulation. */
-  inputLog: import('./replay').InputEvent[];
   /** Server-issued run token, or null for local/offline runs. */
   run: import('../leaderboard').SignedSeed | null;
 }
@@ -46,9 +40,6 @@ export function makeGameState(): GameState {
     highScore: loadHighScore(),
     wave: 1,
     level: 1,
-    seed: 0,
-    tick: 0,
-    inputLog: [],
     run: null,
   };
 }
@@ -58,7 +49,7 @@ export function makeGameState(): GameState {
 /**
  * Start a new game from IDLE. No-op if not in IDLE.
  */
-export function startGame(state: GameState, seed = 0): GameState {
+export function startGame(state: GameState): GameState {
   if (state.phase !== 'IDLE') return state;
   return {
     ...state,
@@ -66,9 +57,6 @@ export function startGame(state: GameState, seed = 0): GameState {
     score: 0,
     wave: 1,
     level: 1,
-    seed,
-    tick: 0,
-    inputLog: [],
     run: null,
   };
 }
@@ -123,7 +111,7 @@ export function triggerWin(state: GameState): GameState {
  */
 export function returnToIdle(state: GameState): GameState {
   if (state.phase === 'GAME_OVER' || state.phase === 'WIN') {
-    return { ...state, phase: 'IDLE', run: null, inputLog: [] };
+    return { ...state, phase: 'IDLE', run: null };
   }
   return state;
 }

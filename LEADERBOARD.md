@@ -17,6 +17,20 @@ deployment, and a phase checklist with gate criteria.
 
 ## 0. The core idea: never trust the score
 
+> **⚠️ Implementation note (superseded).** The deterministic-replay model
+> described in this section was shipped but **rolled back**. Re-deriving the
+> score on the server required a second, byte-for-byte copy of the game
+> simulation (`simulate.ts`) that had to stay in lockstep with the live game
+> loop. They drifted, so the player saw score *X* while the server saved score
+> *Y* — the leaderboard was inconsistent. The current implementation **trusts
+> the client's reported score**: `/api/submit` verifies the signed seed (a
+> single-use, recently-issued HMAC token) and dedups it, then saves the score
+> the client sends, clamped to `[0, 999999]`. This is intentionally *less*
+> cheat-proof (the score field can be forged by a determined attacker) in
+> exchange for the score that's saved always matching the score the player
+> earned. `simulate.ts`/`replay.ts` and the input-log plumbing were removed.
+> The rest of this document is retained for historical context.
+
 The previous draft of this plan tried to make a *client-reported score* hard to
 forge — session tokens, server-owned `started_at`, elapsed-time plausibility,
 rate limits. All of that is heuristics layered on a number the attacker picks.

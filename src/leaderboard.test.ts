@@ -80,24 +80,36 @@ describe('startRun', () => {
 });
 
 describe('submitRun', () => {
-  it('sends input log without a score field', async () => {
+  it('sends the score with the signed seed and no input log', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ rank: 2 }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    await expect(submitRun(run, 'AAA', [{ tick: 1, key: 2, down: true }])).resolves.toEqual({ rank: 2 });
+    await expect(submitRun(run, 'AAA', 4250)).resolves.toEqual({ rank: 2 });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.score).toBeUndefined();
-    expect(body.inputLog).toEqual([{ tick: 1, key: 2, down: true }]);
+    expect(body.score).toBe(4250);
+    expect(body.seed).toBe(run.seed);
+    expect(body.inputLog).toBeUndefined();
+  });
+
+  it('clamps the score to an integer in [0, 999999]', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ rank: 1 }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await submitRun(run, 'AAA', 1_000_000.9);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).score).toBe(999999);
+    await submitRun(run, 'AAA', -5);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).score).toBe(0);
+    await submitRun(run, 'AAA', 30.7);
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).score).toBe(30);
   });
 
   it('throws rejected for 4xx responses', async () => {
     mockFetch(new Response(JSON.stringify({ error: 'bad-seed' }), { status: 400 }));
-    await expect(submitRun(run, 'AAA', [])).rejects.toMatchObject({ kind: 'rejected' });
+    await expect(submitRun(run, 'AAA', 100)).rejects.toMatchObject({ kind: 'rejected' });
   });
 
   it('throws offline on network failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
-    await expect(submitRun(run, 'AAA', [])).rejects.toBeInstanceOf(LeaderboardError);
-    await expect(submitRun(run, 'AAA', [])).rejects.toMatchObject({ kind: 'offline' });
+    await expect(submitRun(run, 'AAA', 100)).rejects.toBeInstanceOf(LeaderboardError);
+    await expect(submitRun(run, 'AAA', 100)).rejects.toMatchObject({ kind: 'offline' });
   });
 });
 
