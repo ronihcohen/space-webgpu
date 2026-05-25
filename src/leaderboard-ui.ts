@@ -130,10 +130,17 @@ export function showLeaderboardOverlay(options: ShowOptions): void {
       } catch (err) {
         console.error('[leaderboard] submit error:', err);
         const kind = err instanceof LeaderboardError ? err.kind : 'server';
-        status.textContent = kind === 'offline'
-          ? "You're offline. Score not submitted."
-          : 'Run could not be verified.';
-        button.disabled = kind !== 'offline';
+        if (kind === 'offline') {
+          status.textContent = "You're offline. Score not submitted.";
+        } else if (kind === 'server') {
+          status.textContent = 'Server error — tap Submit to retry.';
+        } else {
+          status.textContent = 'Run could not be verified.';
+        }
+        // Only permanently disable for rejected (bad token, expired seed).
+        // Offline and server errors are transient — keep the button live so
+        // the player can retry without losing their score.
+        button.disabled = kind === 'rejected';
       }
     });
   }

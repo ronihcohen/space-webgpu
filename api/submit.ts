@@ -41,14 +41,8 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
     return;
   }
 
-  // The signed seed proves the submission carries a token this server issued
-  // recently (HMAC + TTL), and the submissions table makes it single-use. That
-  // is the whole anti-abuse story now: we trust the client's reported score
-  // rather than re-deriving it from a replay. Re-deriving meant maintaining a
-  // second, byte-identical copy of the game simulation on the server; any drift
-  // between it and the live game saved a different score than the player saw.
-  // Trusting the client is less cheat-proof but makes the saved score exactly
-  // the score the player earned.
+  // Verify the server-issued HMAC token: proves the seed was issued by this
+  // server recently (TTL check) and hasn't been tampered with.
   if (!verifySeed({ seed: body.seed, issuedAt: body.issuedAt, sig: body.sig })) {
     bad(res, 'bad-seed');
     return;
@@ -66,38 +60,22 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
     return;
   }
 
-  const submitted = await sql`
-    insert into submissions (seed)
-    values (${body.seed})
-    on conflict do nothing
-    returning seed
-  `;
-  if (submitted.rowCount === 0) {
-    const rankRows = await sql`
-      select count(*)::int + 1 as rank
-      from leaderboard
-      where score > ${score}
-    `;
-    const rank = rankRows.rows[0]?.rank ?? 0;
-    console.log('[submit] duplicate seed, rank:', rank);
-    res.status(200).json({ status: 'already-submitted', rank });
-    return;
-  }
-
+  // Single atomic write: seed dedup + score save in one query.
+  // ON CONFLICT (seed) DO NOTHING means a duplicate seed is silently ignored
+  // and rowCount comes back 0. This replaces the old two-step design
+  // (INSERT submissions, then INSERT leaderboard) which could be interrupted
+  // between the two writes — consuming the seed token permanently while the
+  // score was never saved.
   await sql`
-    insert into leaderboard (name, score)
-    values (${name}, ${score})
+    INSERT INTO leaderboard (seed, name, score)
+    VALUES (${body.seed}, ${name}, ${score})
+    ON CONFLICT (seed) DO NOTHING
   `;
+
   const rankRows = await sql`
-    select count(*)::int + 1 as rank
-    from leaderboard
-    where score > ${score}
-  `;
-  const topRows = await sql`
-    select name, score from leaderboard order by score desc limit 15
+    SELECT count(*)::int + 1 AS rank FROM leaderboard WHERE score > ${score}
   `;
   const rank = rankRows.rows[0]?.rank ?? 0;
-  console.log('[submit] inserted score:', score, 'rank:', rank);
-  console.log('[submit] top 15:', topRows.rows.map((r: { name: string; score: number }) => `${r.name}:${r.score}`).join(', '));
+  console.log('[submit] score:', score, 'rank:', rank, 'seed:', body.seed.slice(0, 8));
   res.status(200).json({ rank });
 }
