@@ -125,9 +125,10 @@ export function showLeaderboardOverlay(options: ShowOptions): void {
       status.textContent = 'Verifying...';
       try {
         const result = await submitRun(run, name, options.inputLog);
-        status.textContent = result.rank > 0 ? `Submitted. Rank ${result.rank}.` : 'Submitted.';
+        const rankMsg = result.rank > 0 ? `Submitted! You ranked #${result.rank}.` : 'Submitted!';
         form.remove();
         await loadRows(list, status);
+        status.textContent = rankMsg;
       } catch (err) {
         const kind = err instanceof LeaderboardError ? err.kind : 'server';
         status.textContent = kind === 'offline'

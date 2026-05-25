@@ -1082,7 +1082,7 @@ async function bootstrap(): Promise<void> {
             wavePendingLives = sim.player.lives;
             gs = advanceWave(gs);
             waveClearLevel = gs.level;
-            waveClearPhrase = WAVE_CLEAR_PHRASES[Math.floor(rng.next() * WAVE_CLEAR_PHRASES.length)];
+            waveClearPhrase = WAVE_CLEAR_PHRASES[Math.floor(Math.random() * WAVE_CLEAR_PHRASES.length)];
             waveClearTimer = 3.0;
             sim = { ...sim, bullets: [] };
             break;
