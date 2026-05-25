@@ -22,7 +22,8 @@ No Canvas 2D. No WebGL.
 
 - Full game loop: IDLE → PLAYING → GAME OVER / WIN → IDLE
 - 5×11 invader grid with arcade-accurate speed table (faster as invaders die)
-- **Level system**: each screen clear increases the difficulty — invaders move faster and shoot more often. Dying resets the level.
+- **Waves**: clearing the screen starts a new wave — the grid respawns and begins one row lower than the previous wave (capped after 3 drops so it never spawns on top of the barriers)
+- **Level system**: each screen clear also raises the difficulty level — invaders move faster and fire more often. Taking a hit resets the level back to 1, so each new life starts fair
 - Per-pixel barrier erosion — bullets carve asymmetric notches (upward fan for player shots, downward for enemy shots)
 - UFO mystery ship with random score values (50 / 100 / 150 / 300)
 - 3 lives with explosion animation and brief invulnerability on respawn
