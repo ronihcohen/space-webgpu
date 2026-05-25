@@ -36,11 +36,74 @@
       #error-overlay.visible {
         display: flex;
       }
+
+      /* ── Touch controls (shown only on coarse-pointer / touchscreen devices) ── */
+      #touch-controls {
+        display: none;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 20px 24px;
+        justify-content: space-between;
+        align-items: flex-end;
+        z-index: 10;
+      }
+      @media (pointer: coarse) {
+        #touch-controls { display: flex; }
+      }
+      .touch-group {
+        display: flex;
+        gap: 14px;
+      }
+      .touch-btn {
+        width: 76px;
+        height: 76px;
+        border-radius: 50%;
+        border: 2px solid rgba(0,255,0,0.6);
+        background: rgba(0,255,0,0.08);
+        color: #0f0;
+        font-size: 1.6rem;
+        font-family: monospace;
+        cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+        -webkit-tap-highlight-color: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 80ms;
+      }
+      .touch-btn:active,
+      .touch-btn.active {
+        background: rgba(0,255,0,0.28);
+      }
+      #btn-fire {
+        width: 96px;
+        height: 96px;
+        font-size: 0.85rem;
+        font-weight: bold;
+        letter-spacing: 2px;
+        border-color: rgba(0,255,0,0.9);
+        background: rgba(0,255,0,0.12);
+      }
     </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
     <div id="error-overlay"></div>
+
+    <div id="touch-controls">
+      <div class="touch-group">
+        <button id="btn-left"  class="touch-btn" aria-label="Move left">&#9664;</button>
+        <button id="btn-right" class="touch-btn" aria-label="Move right">&#9654;</button>
+      </div>
+      <div class="touch-group">
+        <button id="btn-fire"  class="touch-btn" aria-label="Fire">FIRE</button>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

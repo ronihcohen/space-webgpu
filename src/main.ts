@@ -813,6 +813,46 @@ async function bootstrap(): Promise<void> {
   const input = makeInputState();
   attachInputListeners(input);
 
+  // ── Touch controls ─────────────────────────────────────────────────────────
+  // Buttons write directly into the InputState so the sim sees them identically
+  // to keyboard events. Fire auto-repeats every FIRE_REPEAT_TICKS while held.
+  const FIRE_REPEAT_TICKS = 8;
+  let touchFireHeld = false;
+  let touchFireCounter = 0;
+
+  function touchDown(key: string): void {
+    if (!input._held.has(key)) input._pressed.add(key);
+    input._held.add(key);
+  }
+  function touchUp(key: string): void {
+    input._held.delete(key);
+  }
+
+  function bindTouchBtn(id: string, key: string): void {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const onStart = (e: Event): void => {
+      e.preventDefault();
+      audio.resume(); // iOS requires resume() inside a user gesture
+      el.classList.add('active');
+      if (key === 'Space') { touchFireHeld = true; touchFireCounter = 0; }
+      touchDown(key);
+    };
+    const onEnd = (e: Event): void => {
+      e.preventDefault();
+      el.classList.remove('active');
+      if (key === 'Space') touchFireHeld = false;
+      touchUp(key);
+    };
+    el.addEventListener('touchstart',  onStart, { passive: false });
+    el.addEventListener('touchend',    onEnd,   { passive: false });
+    el.addEventListener('touchcancel', onEnd,   { passive: false });
+  }
+
+  bindTouchBtn('btn-left',  'ArrowLeft');
+  bindTouchBtn('btn-right', 'ArrowRight');
+  bindTouchBtn('btn-fire',  'Space');
+
   // ── Auto-pause on blur + visibilitychange ──────────────────────────────────
   window.addEventListener('blur', () => { gs = autoPause(gs); });
   document.addEventListener('visibilitychange', () => {
@@ -917,6 +957,15 @@ async function bootstrap(): Promise<void> {
 
     // Run simulation ticks
     if (gs.phase === 'PLAYING') {
+      // Auto-repeat fire while touch fire button is held
+      if (touchFireHeld) {
+        touchFireCounter++;
+        if (touchFireCounter >= FIRE_REPEAT_TICKS) {
+          input._pressed.add('Space');
+          touchFireCounter = 0;
+        }
+      }
+
       while (acc >= DT) {
         const result = updateSim(sim, gs, input, renderer, audio);
         sim = result.sim;
