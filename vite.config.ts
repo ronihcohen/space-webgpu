@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/space-webgpu/',
+  base: process.env.VERCEL ? '/' : '/space-webgpu/',
 });

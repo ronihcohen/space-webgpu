@@ -5,14 +5,14 @@
  * All values tuned to approximate the original arcade ROM.
  */
 
-import type { Invader } from './entities';
+import type { Invader } from './entities.js';
 import {
   invaderTypeForRow,
   INVADER_GRID_START_X,
   INVADER_GRID_START_Y,
   INVADER_CELL_W,
   INVADER_CELL_H,
-} from './entities';
+} from './entities.js';
 
 // ─── Grid dimensions ──────────────────────────────────────────────────────────
 

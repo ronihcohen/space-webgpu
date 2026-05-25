@@ -36,6 +36,105 @@
       #error-overlay.visible {
         display: flex;
       }
+      #leaderboard-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        background: rgba(0, 0, 0, 0.94);
+        color: #0f0;
+        font-family: monospace;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      #leaderboard-overlay.visible { display: flex; }
+      .leaderboard-panel {
+        width: min(440px, 100%);
+        max-height: calc(100dvh - 48px);
+        overflow-y: auto;
+        border: 1px solid rgba(0, 255, 0, 0.7);
+        padding: 20px;
+        background: #000;
+      }
+      .leaderboard-panel h1 {
+        font-size: 1.1rem;
+        margin-bottom: 16px;
+        text-align: center;
+        letter-spacing: 0;
+      }
+      .leaderboard-list {
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        min-height: 80px;
+        margin-bottom: 14px;
+      }
+      .leaderboard-list li {
+        display: grid;
+        grid-template-columns: 32px 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .leaderboard-list strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .leaderboard-list em {
+        font-style: normal;
+        color: #fff;
+      }
+      .leaderboard-empty {
+        grid-template-columns: 1fr !important;
+        color: rgba(0, 255, 0, 0.75);
+      }
+      .leaderboard-status {
+        min-height: 1.2em;
+        margin-bottom: 14px;
+        color: #fff;
+      }
+      .leaderboard-submit {
+        border-top: 1px solid rgba(0, 255, 0, 0.35);
+        border-bottom: 1px solid rgba(0, 255, 0, 0.35);
+        padding: 14px 0;
+        margin-bottom: 16px;
+      }
+      #leaderboard-form {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 8px;
+        align-items: center;
+        margin-top: 10px;
+      }
+      #leaderboard-name {
+        min-width: 0;
+        border: 1px solid rgba(0, 255, 0, 0.7);
+        background: #020;
+        color: #fff;
+        font: inherit;
+        padding: 8px;
+      }
+      #leaderboard-form button,
+      #leaderboard-again {
+        border: 1px solid rgba(0, 255, 0, 0.8);
+        background: rgba(0, 255, 0, 0.08);
+        color: #0f0;
+        font: inherit;
+        padding: 8px 10px;
+        cursor: pointer;
+      }
+      #leaderboard-form button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+      #leaderboard-again {
+        width: 100%;
+      }
+      .leaderboard-note {
+        margin-top: 10px;
+        color: rgba(0, 255, 0, 0.75);
+      }
 
       /* ── Touch controls (shown only on coarse-pointer / touchscreen devices) ── */
       #touch-controls {
@@ -117,6 +216,7 @@
   <body>
     <canvas id="canvas"></canvas>
     <div id="error-overlay"></div>
+    <div id="leaderboard-overlay"></div>
 
     <button id="btn-pause" class="touch-btn" aria-label="Pause">&#9646;&#9646;</button>
 

@@ -9,13 +9,13 @@
  * when a bullet moves several pixels per tick.
  */
 
-import type { Bullet, BarrierMask } from './entities';
+import type { Bullet, BarrierMask } from './entities.js';
 import {
   BARRIER_W,
   BARRIER_H,
   SPLASH_UP_OFFSETS,
   SPLASH_DOWN_OFFSETS,
-} from './entities';
+} from './entities.js';
 
 // ─── AABB collision ───────────────────────────────────────────────────────────
 

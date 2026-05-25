@@ -39,13 +39,31 @@ export interface InputState {
   _held: Set<string>;
   /** Keys pressed since the last consumePressed() call. */
   _pressed: Set<string>;
+  /** Tick-local game action edges used for deterministic replay. */
+  _edges: Array<{ key: import('./replay').InputKey; down: boolean }>;
+  /** Window-level handlers ignore keys while disabled. */
+  _enabled: boolean;
 }
 
 export function makeInputState(): InputState {
   return {
     _held: new Set(),
     _pressed: new Set(),
+    _edges: [],
+    _enabled: true,
   };
+}
+
+function actionForCode(code: string): import('./replay').InputKey | null {
+  if (code === 'ArrowLeft' || code === 'KeyA') return 0;
+  if (code === 'ArrowRight' || code === 'KeyD') return 1;
+  if (code === 'Space') return 2;
+  return null;
+}
+
+export function recordInputEdgeForCode(state: InputState, code: string, down: boolean): void {
+  const key = actionForCode(code);
+  if (key !== null) state._edges.push({ key, down });
 }
 
 /**
@@ -54,6 +72,8 @@ export function makeInputState(): InputState {
  */
 export function attachInputListeners(state: InputState): () => void {
   function onKeyDown(e: KeyboardEvent): void {
+    if (!state._enabled) return;
+
     // Prevent page scroll for game-used keys
     if (PREVENT_DEFAULT_KEYS.has(e.code)) {
       e.preventDefault();
@@ -64,11 +84,16 @@ export function attachInputListeners(state: InputState): () => void {
     // Edge event: only record wasPressed on the leading edge (ignore key-repeat)
     if (!state._held.has(e.code)) {
       state._pressed.add(e.code);
+      const key = actionForCode(e.code);
+      if (key !== null) state._edges.push({ key, down: true });
     }
     state._held.add(e.code);
   }
 
   function onKeyUp(e: KeyboardEvent): void {
+    if (!state._enabled) return;
+    const key = actionForCode(e.code);
+    if (key !== null && state._held.has(e.code)) state._edges.push({ key, down: false });
     state._held.delete(e.code);
   }
 
@@ -79,6 +104,21 @@ export function attachInputListeners(state: InputState): () => void {
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('keyup', onKeyUp);
   };
+}
+
+export function setInputEnabled(state: InputState, enabled: boolean): void {
+  state._enabled = enabled;
+  if (!enabled) {
+    state._held.clear();
+    state._pressed.clear();
+    state._edges = [];
+  }
+}
+
+export function drainInputEdges(state: InputState): Array<{ key: import('./replay').InputKey; down: boolean }> {
+  const edges = state._edges;
+  state._edges = [];
+  return edges;
 }
 
 /**

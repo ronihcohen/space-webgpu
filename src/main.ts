@@ -84,13 +84,18 @@ import {
 import {
   makeInputState,
   attachInputListeners,
+  drainInputEdges,
   isDown,
   isDownEither,
+  recordInputEdgeForCode,
   wasPressed,
   type InputState,
 } from './game/input';
 import { aabbOverlap, sweptBulletBarrierHit, applySplash, type Rect } from './game/physics';
 import { makeAudioManager, type AudioManager } from './game/sound';
+import { makeRng, randomLocalSeed, seedFrom, type Rng } from './game/rng';
+import { startRun, type SignedSeed } from './leaderboard';
+import { showLeaderboardOverlay } from './leaderboard-ui';
 
 // ── Fixed timestep constants ──────────────────────────────────────────────────
 const DT = 1 / 60;          // seconds per logic tick
@@ -146,7 +151,7 @@ function makeBarriers(): BarrierMask[] {
   }));
 }
 
-function makeSim(waveN: number): SimState {
+function makeSim(waveN: number, rng: Rng): SimState {
   return {
     player: makePlayer(),
     grid: makeInvaderGrid(waveN),
@@ -156,7 +161,7 @@ function makeSim(waveN: number): SimState {
       x: -SPRITE_SIZES.ufo.w / 2,
       dir: 1,
       active: false,
-      spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
+      spawnTimer: UFO_SPAWN_MIN_S + rng.next() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
     },
     gridStepAccum: 0,
     invaderStepNote: 0,
@@ -202,6 +207,7 @@ function updateSim(
   renderer: Renderer,
   audio: AudioManager,
   autoFireEnabled: boolean,
+  rng: Rng,
 ): { sim: SimState; gs: GameState; waveComplete: boolean } {
   let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion, playerFireCooldown } = sim;
   let waveComplete = false;
@@ -340,7 +346,7 @@ function updateSim(
     for (const [col, row] of eligibleCols) {
       if (bullets.filter((b) => b.owner === 'enemy').length >= MAX_ENEMY_BULLETS) break;
       const fireChance = Math.min(INVADER_FIRE_CHANCE * (1 + 0.6 * (gs.level - 1)), 1 / 12);
-      if (Math.random() < fireChance) {
+      if (rng.next() < fireChance) {
         const inv = grid.invaders.find((i) => i.alive && i.col === col && i.row === row);
         if (inv) {
           const bx = invaderWorldX(grid, inv);
@@ -387,7 +393,7 @@ function updateSim(
       ufo = {
         ...ufo,
         active: false,
-        spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
+        spawnTimer: UFO_SPAWN_MIN_S + rng.next() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
       };
       audio.ufoStop();
     } else {
@@ -437,13 +443,13 @@ function updateSim(
       if (b.owner !== 'player') continue;
       if (deadBulletIndices.has(bi)) continue;
       if (aabbOverlap(ufoRect, bulletRect(b))) {
-        const scoreIdx = Math.floor(Math.random() * UFO_SCORE_VALUES.length);
+        const scoreIdx = Math.floor(rng.next() * UFO_SCORE_VALUES.length);
         const scoreValue = UFO_SCORE_VALUES[scoreIdx];
         gs = addScore(gs, scoreValue);
         ufo = {
           ...ufo,
           active: false,
-          spawnTimer: UFO_SPAWN_MIN_S + Math.random() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
+          spawnTimer: UFO_SPAWN_MIN_S + rng.next() * (UFO_SPAWN_MAX_S - UFO_SPAWN_MIN_S),
         };
         ufoExplosion = { x: ufo.x, scoreValue, timer: 1.0 };
         deadBulletIndices.add(bi);
@@ -851,6 +857,30 @@ async function bootstrap(): Promise<void> {
   let autoFireEnabled = mobileTouch;
   let gs: GameState;
   let sim: SimState;
+  let rng = makeRng(0);
+  let pendingRun: SignedSeed | null = null;
+  let leaderboardOpen = false;
+
+  function prefetchRun(): void {
+    pendingRun = null;
+    void startRun().then((run) => {
+      pendingRun = run;
+    });
+  }
+
+  function beginRun(): void {
+    const run = pendingRun;
+    const seed = seedFrom(run ? run.seed : randomLocalSeed());
+    rng = makeRng(seed);
+    gs = startGame(gs, seed);
+    gs = { ...gs, run };
+    if (autoFireEnabled) {
+      gs.inputLog.push({ tick: 0, key: 2, down: true });
+    }
+    sim = makeSim(gs.wave, rng);
+    for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
+    pendingRun = null;
+  }
 
   // ── Touch controls ─────────────────────────────────────────────────────────
   // Buttons write directly into the InputState so the sim sees them identically
@@ -858,10 +888,14 @@ async function bootstrap(): Promise<void> {
   // button maps to Space so it also begins play from IDLE.
 
   function touchDown(key: string): void {
+    if (!input._enabled) return;
     if (!input._held.has(key)) input._pressed.add(key);
+    if (!input._held.has(key)) recordInputEdgeForCode(input, key, true);
     input._held.add(key);
   }
   function touchUp(key: string): void {
+    if (!input._enabled) return;
+    if (input._held.has(key)) recordInputEdgeForCode(input, key, false);
     input._held.delete(key);
   }
 
@@ -914,12 +948,13 @@ async function bootstrap(): Promise<void> {
 
   // ── Game state ─────────────────────────────────────────────────────────────
   gs = makeGameState();
-  sim = makeSim(gs.wave);
+  sim = makeSim(gs.wave, rng);
   let waveClearTimer = 0;
   let waveClearLevel = 1;
   let waveClearPhrase = WAVE_CLEAR_PHRASES[0];
   let wavePendingLives = 3;
   let gameOverTimer = 0;
+  prefetchRun();
 
   // Upload initial barrier masks to the renderer
   for (let i = 0; i < 4; i++) {
@@ -947,19 +982,20 @@ async function bootstrap(): Promise<void> {
       start() {
         if (gs.phase === 'IDLE') {
           gs = startGame(gs);
-          sim = makeSim(gs.wave);
+          sim = makeSim(gs.wave, rng);
           for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
         }
       },
       reset() {
         gs = makeGameState();
-        sim = makeSim(gs.wave);
+        rng = makeRng(0);
+        sim = makeSim(gs.wave, rng);
         for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
       },
       advance(ticks: number) {
         for (let t = 0; t < ticks; t++) {
           if (gs.phase === 'PLAYING') {
-            const result = updateSim(sim, gs, input, renderer, audio, false);
+            const result = updateSim(sim, gs, input, renderer, audio, false, rng);
             sim = result.sim;
             gs = result.gs;
             if (result.waveComplete) {
@@ -989,16 +1025,16 @@ async function bootstrap(): Promise<void> {
     // IMPORTANT: wasPressed() is destructive — it consumes the event on first read.
     // Only consume keys here for state machine transitions; leave Space unconsumed
     // while PLAYING so updateSim can read it for firing.
-    const pPressed = wasPressed(input, 'KeyP');
+    const pPressed = leaderboardOpen ? false : wasPressed(input, 'KeyP');
 
-    if (gs.phase === 'IDLE') {
+    if (leaderboardOpen) {
+      acc = 0;
+    } else if (gs.phase === 'IDLE') {
       // Consume Space to start the game (prevents a bullet firing on the first sim tick)
       const spacePressed = wasPressed(input, 'Space');
       if (spacePressed || pPressed) {
         audio.resume(); // Unlock AudioContext — MUST be called from a user gesture
-        gs = startGame(gs);
-        sim = makeSim(gs.wave);
-        for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
+        beginRun();
         acc = 0; // discard time accumulated while on IDLE screen
       }
     } else if (gs.phase === 'PLAYING') {
@@ -1012,6 +1048,7 @@ async function bootstrap(): Promise<void> {
       const spacePressed = wasPressed(input, 'Space');
       if (gameOverTimer <= 0 && (spacePressed || pPressed)) {
         gs = returnToIdle(gs);
+        prefetchRun();
       }
     }
 
@@ -1021,7 +1058,7 @@ async function bootstrap(): Promise<void> {
         // Wave-clear interstitial: freeze sim, count down
         waveClearTimer = Math.max(0, waveClearTimer - rawDt);
         if (waveClearTimer <= 0) {
-          sim = makeSim(gs.wave);
+          sim = makeSim(gs.wave, rng);
           sim = { ...sim, player: { ...sim.player, lives: wavePendingLives } };
           for (let i = 0; i < 4; i++) renderer.barriers.upload(i, sim.barriers[i].mask);
           input._pressed.delete('Space'); // don't fire immediately on wave start
@@ -1030,9 +1067,14 @@ async function bootstrap(): Promise<void> {
       } else {
         const prevPhase = gs.phase;
         while (acc >= DT) {
-          const result = updateSim(sim, gs, input, renderer, audio, autoFireEnabled);
+          const edges = drainInputEdges(input);
+          for (const edge of edges) {
+            gs.inputLog.push({ tick: gs.tick, ...edge });
+          }
+          const result = updateSim(sim, gs, input, renderer, audio, autoFireEnabled, rng);
           sim = result.sim;
           gs = result.gs;
+          gs = { ...gs, tick: gs.tick + 1 };
           acc -= DT;
 
           if (result.waveComplete) {
@@ -1040,7 +1082,7 @@ async function bootstrap(): Promise<void> {
             wavePendingLives = sim.player.lives;
             gs = advanceWave(gs);
             waveClearLevel = gs.level;
-            waveClearPhrase = WAVE_CLEAR_PHRASES[Math.floor(Math.random() * WAVE_CLEAR_PHRASES.length)];
+            waveClearPhrase = WAVE_CLEAR_PHRASES[Math.floor(rng.next() * WAVE_CLEAR_PHRASES.length)];
             waveClearTimer = 3.0;
             sim = { ...sim, bullets: [] };
             break;
@@ -1053,6 +1095,23 @@ async function bootstrap(): Promise<void> {
 
         if (prevPhase === 'PLAYING' && gs.phase === 'GAME_OVER') {
           gameOverTimer = 2.5;
+          if (gs.score > 0) {
+            leaderboardOpen = true;
+            const score = gs.score;
+            const run = gs.run;
+            const inputLog = [...gs.inputLog];
+            showLeaderboardOverlay({
+              score,
+              run,
+              inputLog,
+              input,
+              onPlayAgain: () => {
+                gs = returnToIdle(gs);
+                prefetchRun();
+                leaderboardOpen = false;
+              },
+            });
+          }
         }
       }
     } else {
