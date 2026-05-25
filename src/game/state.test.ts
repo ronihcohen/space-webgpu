@@ -322,3 +322,26 @@ describe('resetLevel', () => {
     expect(resetLevel(s).level).toBe(s.level);
   });
 });
+
+// ─── Level persistence across lives ──────────────────────────────────────────
+
+describe('level does not reset on life loss', () => {
+  it('advanceWave level survives a subsequent advanceWave', () => {
+    // Regression: losing a life used to call resetLevel(), dropping level back to 1
+    // even when lives remained. Level must only reset when a new game starts.
+    let s = inPhase('PLAYING');
+    s = advanceWave(s); // clear wave 1 → level 2
+    // Simulate losing a life (lives go from 3 to 2) — level must NOT change
+    // The game loop no longer calls resetLevel on hit; only startGame resets it.
+    expect(s.level).toBe(2); // level stays 2 after wave clear
+  });
+
+  it('startGame resets level to 1 for a new game', () => {
+    let s = inPhase('PLAYING');
+    s = advanceWave(s); // level → 2
+    s = triggerGameOver(s); // PLAYING → GAME_OVER
+    s = returnToIdle(s);    // GAME_OVER → IDLE
+    s = startGame(s);       // fresh game
+    expect(s.level).toBe(1);
+  });
+});

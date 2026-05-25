@@ -68,7 +68,6 @@ import {
   returnToIdle,
   addScore,
   advanceWave,
-  resetLevel,
   type GameState,
 } from './game/state';
 import {
@@ -472,7 +471,6 @@ function updateSim(
             explodeFrame: 0,
             explodeTimer: EXPLOSION_FRAME_DURATION,
           };
-          gs = resetLevel(gs);
         }
         break;
       }
