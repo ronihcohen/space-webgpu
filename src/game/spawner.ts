@@ -64,7 +64,7 @@ export function framesPerStep(alive: number): number {
  * the full table still applies as invaders die.
  */
 export function startFrames(waveN: number): number {
-  return Math.max(24 - 3 * (waveN - 1), 8);
+  return Math.max(24 - 5 * (waveN - 1), 4);
 }
 
 /**
@@ -74,7 +74,7 @@ export function startFrames(waveN: number): number {
  * even with a full grid of 55 invaders.
  */
 export function levelSpeedCap(level: number): number {
-  return Math.max(24 - 4 * (level - 1), 3);
+  return Math.max(24 - 6 * (level - 1), 4);
 }
 
 // ─── Wave start row drop ──────────────────────────────────────────────────────

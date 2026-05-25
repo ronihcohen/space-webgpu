@@ -123,6 +123,8 @@ interface SimState {
   invaderExplosion: { col: number; row: number; timer: number } | null;
   /** UFO explosion + score popup after being shot */
   ufoExplosion: { x: number; scoreValue: number; timer: number } | null;
+  /** Seconds until the player can fire again (auto-fire rate limiter) */
+  playerFireCooldown: number;
 }
 
 function makePlayer(): Player {
@@ -160,6 +162,7 @@ function makeSim(waveN: number): SimState {
     invaderStepNote: 0,
     invaderExplosion: null,
     ufoExplosion: null,
+    playerFireCooldown: 0,
   };
 }
 
@@ -199,7 +202,7 @@ function updateSim(
   renderer: Renderer,
   audio: AudioManager,
 ): { sim: SimState; gs: GameState; waveComplete: boolean } {
-  let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion } = sim;
+  let { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion, playerFireCooldown } = sim;
   let waveComplete = false;
 
   // ── Player explosion / respawn ──────────────────────────────────────────────
@@ -224,7 +227,7 @@ function updateSim(
     }
     // Freeze movement and firing while exploding
     return {
-      sim: { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion },
+      sim: { player, grid, bullets, barriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion, playerFireCooldown },
       gs,
       waveComplete,
     };
@@ -246,9 +249,9 @@ function updateSim(
   }
 
   // ── Player fire ─────────────────────────────────────────────────────────────
-  // Auto-fire: hold Space to fire continuously; one bullet on screen at a time.
-  const playerBulletActive = bullets.some((b) => b.owner === 'player');
-  if (!playerBulletActive && isDown(input, 'Space')) {
+  if (playerFireCooldown > 0) playerFireCooldown = Math.max(0, playerFireCooldown - DT);
+  if (playerFireCooldown <= 0 && isDown(input, 'Space')) {
+    playerFireCooldown = 0.12; // ~8 shots/sec
     audio.shoot();
     bullets = [
       ...bullets,
@@ -524,7 +527,7 @@ function updateSim(
   }
 
   return {
-    sim: { player, grid, bullets, barriers: updatedBarriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion },
+    sim: { player, grid, bullets, barriers: updatedBarriers, ufo, gridStepAccum, invaderStepNote, invaderExplosion, ufoExplosion, playerFireCooldown },
     gs,
     waveComplete,
   };
@@ -566,12 +569,26 @@ function centeredX(text: string): number {
  * Append HUD (always-visible score/hi-score/lives) and phase-specific overlay
  * text (IDLE title, PAUSED, GAME_OVER, WIN) to the instance list.
  */
+const WAVE_CLEAR_PHRASES = [
+  'NOW HARDER',
+  'GOOD LUCK',
+  'THEY ARE ANGRY',
+  'FASTER NOW',
+  'STAY SHARP',
+  'HERE THEY COME',
+  'NO MERCY',
+  'SPEED UP',
+  'THEY MEAN IT',
+  'BRACE YOURSELF',
+];
+
 function buildHudInstances(
   instances: SpriteInstance[],
   gs: GameState,
   player: Player,
   waveClearTimer: number,
   waveClearLevel: number,
+  waveClearPhrase: string,
   gameOverTimer: number,
 ): void {
   // ── Always-visible score strip ────────────────────────────────────────────
@@ -612,8 +629,7 @@ function buildHudInstances(
   } else if (gs.phase === 'PLAYING' && waveClearTimer > 0) {
     const lvlMsg = `LEVEL ${waveClearLevel}`;
     pushText(instances, lvlMsg, centeredX(lvlMsg), 96);
-    const hardMsg = 'NOW HARDER';
-    pushText(instances, hardMsg, centeredX(hardMsg), 112);
+    pushText(instances, waveClearPhrase, centeredX(waveClearPhrase), 112);
   } else if (gs.phase === 'WIN') {
     const msg = 'STAGE CLEAR';
     pushText(instances, msg, centeredX(msg), 100);
@@ -632,6 +648,7 @@ function buildInstances(
   renderer: Renderer,
   waveClearTimer: number,
   waveClearLevel: number,
+  waveClearPhrase: string,
   gameOverTimer: number,
 ): SpriteInstance[] {
   const { player, grid, bullets, ufo, invaderExplosion, ufoExplosion } = sim;
@@ -774,7 +791,7 @@ function buildInstances(
   }
 
   // ── HUD + overlays ────────────────────────────────────────────────────────────
-  buildHudInstances(instances, gs, player, waveClearTimer, waveClearLevel, gameOverTimer);
+  buildHudInstances(instances, gs, player, waveClearTimer, waveClearLevel, waveClearPhrase, gameOverTimer);
 
   return instances;
 }
@@ -893,6 +910,7 @@ async function bootstrap(): Promise<void> {
   let sim: SimState = makeSim(gs.wave);
   let waveClearTimer = 0;
   let waveClearLevel = 1;
+  let waveClearPhrase = WAVE_CLEAR_PHRASES[0];
   let wavePendingLives = 3;
   let gameOverTimer = 0;
 
@@ -1015,6 +1033,7 @@ async function bootstrap(): Promise<void> {
             wavePendingLives = sim.player.lives;
             gs = advanceWave(gs);
             waveClearLevel = gs.level;
+            waveClearPhrase = WAVE_CLEAR_PHRASES[Math.floor(Math.random() * WAVE_CLEAR_PHRASES.length)];
             waveClearTimer = 3.0;
             sim = { ...sim, bullets: [] };
             break;
@@ -1035,7 +1054,7 @@ async function bootstrap(): Promise<void> {
 
     // Render
     const time = (now - startTime) / 1000;
-    const instances = buildInstances(sim, gs, renderer, waveClearTimer, waveClearLevel, gameOverTimer);
+    const instances = buildInstances(sim, gs, renderer, waveClearTimer, waveClearLevel, waveClearPhrase, gameOverTimer);
     renderer.draw(instances, time);
 
     requestAnimationFrame(frame);
