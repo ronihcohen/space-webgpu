@@ -27,6 +27,8 @@ export interface GameState {
   score: number;
   highScore: number;
   wave: number;
+  /** Current difficulty level. Increments on each screen clear, resets to 1 on player death. */
+  level: number;
 }
 
 export function makeGameState(): GameState {
@@ -35,6 +37,7 @@ export function makeGameState(): GameState {
     score: 0,
     highScore: loadHighScore(),
     wave: 1,
+    level: 1,
   };
 }
 
@@ -50,6 +53,7 @@ export function startGame(state: GameState): GameState {
     phase: 'PLAYING',
     score: 0,
     wave: 1,
+    level: 1,
   };
 }
 
@@ -121,9 +125,19 @@ export function addScore(state: GameState, points: number): GameState {
 
 /**
  * Advance to the next wave (called when all invaders cleared).
+ * Also increments the difficulty level.
  */
 export function advanceWave(state: GameState): GameState {
-  return { ...state, wave: state.wave + 1 };
+  return { ...state, wave: state.wave + 1, level: state.level + 1 };
+}
+
+/**
+ * Reset difficulty level to 1 after a player death (with lives remaining).
+ * Only valid from PLAYING; no-op in any other state.
+ */
+export function resetLevel(state: GameState): GameState {
+  if (state.phase !== 'PLAYING') return state;
+  return { ...state, level: 1 };
 }
 
 // ─── High score persistence ────────────────────────────────────────────────────

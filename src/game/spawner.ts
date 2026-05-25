@@ -67,6 +67,16 @@ export function startFrames(waveN: number): number {
   return Math.max(48 - 5 * (waveN - 1), 16);
 }
 
+/**
+ * Maximum frames-per-step allowed at a given difficulty level.
+ * Level 1 = 48 (uncapped). Each level subtracts 4 frames, floored at 8.
+ * Applied as an upper bound on framesPerStep so higher levels start faster
+ * even with a full grid of 55 invaders.
+ */
+export function levelSpeedCap(level: number): number {
+  return Math.max(48 - 4 * (level - 1), 8);
+}
+
 // ─── Wave start row drop ──────────────────────────────────────────────────────
 
 /** Pixels to drop the grid start per cleared wave (waves 2+). */

@@ -68,6 +68,7 @@ import {
   returnToIdle,
   addScore,
   advanceWave,
+  resetLevel,
   type GameState,
 } from './game/state';
 import {
@@ -77,6 +78,7 @@ import {
   invaderWorldY,
   bottomInvadersPerColumn,
   framesPerStep,
+  levelSpeedCap,
   GRID_COLS,
   type InvaderGrid,
 } from './game/spawner';
@@ -269,7 +271,7 @@ function updateSim(
 
   // ── Invader grid step ───────────────────────────────────────────────────────
   const alive = aliveCount(grid);
-  const fps = framesPerStep(alive);
+  const fps = Math.min(framesPerStep(alive), levelSpeedCap(gs.level));
 
   gridStepAccum += 1;
   if (gridStepAccum >= fps) {
@@ -331,7 +333,8 @@ function updateSim(
 
     for (const [col, row] of eligibleCols) {
       if (bullets.filter((b) => b.owner === 'enemy').length >= MAX_ENEMY_BULLETS) break;
-      if (Math.random() < INVADER_FIRE_CHANCE) {
+      const fireChance = Math.min(INVADER_FIRE_CHANCE * (1 + 0.3 * (gs.level - 1)), 1 / 30);
+      if (Math.random() < fireChance) {
         const inv = grid.invaders.find((i) => i.alive && i.col === col && i.row === row);
         if (inv) {
           const bx = invaderWorldX(grid, inv);
@@ -469,6 +472,7 @@ function updateSim(
             explodeFrame: 0,
             explodeTimer: EXPLOSION_FRAME_DURATION,
           };
+          gs = resetLevel(gs);
         }
         break;
       }
@@ -573,9 +577,11 @@ function buildHudInstances(
   const hiVal = String(gs.highScore).padStart(5, '0');
   pushText(instances, hiVal, centeredX(hiVal), 10);
 
-  // Lives (top-right) — show actual count while in-game, placeholder on IDLE
+  // Lives + level (top-right) — show actual values while in-game, placeholder on IDLE
   const livesStr = `LIVES ${gs.phase !== 'IDLE' ? String(player.lives) : '-'}`;
   pushText(instances, livesStr, PLAYFIELD_W - livesStr.length * FONT_CELL_W - 2, 2);
+  const levelStr = `LV ${gs.phase !== 'IDLE' ? String(gs.level) : '-'}`;
+  pushText(instances, levelStr, PLAYFIELD_W - levelStr.length * FONT_CELL_W - 2, 10);
 
   // ── Phase-specific overlays ───────────────────────────────────────────────
   if (gs.phase === 'IDLE') {
