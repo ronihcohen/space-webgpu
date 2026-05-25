@@ -81,4 +81,18 @@ Space Invaders WebGPU phase completion status as of 2026-05-24.
   phase overlays: IDLE title+prompt, PAUSED, GAME_OVER with score, WIN with score
 - localStorage high score: persisted in state.ts via HIGH_SCORE_KEY, loaded on makeGameState()
 
-## Phase 6 — Hardening: NOT STARTED
+## Phase 6 — Hardening: PARTIALLY COMPLETE (2026-05-25)
+
+### Done:
+- Vitest unit tests: 132 tests across 4 files, all passing
+  - `physics.test.ts` (24 tests): AABB, swept collision, splash, out-of-bounds guards
+  - `spawner.test.ts` (54 tests): grid spawn, framesPerStep table boundaries, startFrames, wave drop, fire eligibility, aliveCount
+  - `state.test.ts` (38 tests): all legal/illegal transitions, high score, score, wave
+  - `input.test.ts` (16 tests): isDown, wasPressed edge contract, isDownEither
+- Resize handling: already implemented in renderer.ts — setTimeout(100ms) throttle (~10Hz), calls `configureCanvas` (no pipeline rebuild)
+- Production build verified: 30.13 kB JS, `__game` not in dist
+
+### Pending (manual verification only):
+- Frame-rate independence sanity check (Chrome devtools → Rendering → Frame rendering stats)
+- Background-tab return: switch tabs for 30s, return, confirm no freeze (tests MAX_FRAME clamp)
+- Production build size + load time check (manual/subjective)
