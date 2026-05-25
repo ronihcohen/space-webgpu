@@ -265,8 +265,8 @@ Playtest for 5 minutes. If the cannon feels sluggish or fire feels laggy, fix it
 - [x] `localStorage` high score
 
 ### Phase 6 — Hardening
-- [ ] Vitest unit tests for `physics.ts`, `spawner.ts`, `state.ts`, and the barrier-mask helpers in `entities.ts` — specific cases listed in the [Test Plan](#test-plan) section below
-- [ ] Resize handling: recompute integer scale `N`, reconfigure context backing store, update CSS (see Canvas / DPR). Throttle to ~10Hz so drag-resize doesn't reconfigure every frame.
+- [x] Vitest unit tests for `physics.ts`, `spawner.ts`, `state.ts`, and the barrier-mask helpers in `entities.ts` — specific cases listed in the [Test Plan](#test-plan) section below
+- [x] Resize handling: recompute integer scale `N`, reconfigure context backing store, update CSS (see Canvas / DPR). Throttle to ~10Hz so drag-resize doesn't reconfigure every frame.
 - [ ] Frame-rate independence sanity check (run with Chrome devtools "Rendering → Frame rendering stats")
 - [ ] Background-tab return: switch tabs for 30s, return, confirm no freeze (validates accumulator clamp)
 - [ ] Production build size + load time check
