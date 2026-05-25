@@ -332,7 +332,7 @@ function updateSim(
 
     for (const [col, row] of eligibleCols) {
       if (bullets.filter((b) => b.owner === 'enemy').length >= MAX_ENEMY_BULLETS) break;
-      const fireChance = Math.min(INVADER_FIRE_CHANCE * (1 + 0.3 * (gs.level - 1)), 1 / 30);
+      const fireChance = Math.min(INVADER_FIRE_CHANCE * (1 + 0.6 * (gs.level - 1)), 1 / 12);
       if (Math.random() < fireChance) {
         const inv = grid.invaders.find((i) => i.alive && i.col === col && i.row === row);
         if (inv) {

@@ -74,7 +74,7 @@ export function startFrames(waveN: number): number {
  * even with a full grid of 55 invaders.
  */
 export function levelSpeedCap(level: number): number {
-  return Math.max(48 - 4 * (level - 1), 8);
+  return Math.max(48 - 8 * (level - 1), 6);
 }
 
 // ─── Wave start row drop ──────────────────────────────────────────────────────
