@@ -118,11 +118,11 @@ function invaderRect(grid: InvaderGrid, inv: Invader): Rect {
 }
 
 function playerRect(player: Player): Rect {
-  return { x: player.x - 6.5, y: player.y - 4, w: 13, h: 8 };
+  return { x: player.x - 8, y: player.y - 4, w: 16, h: 8 };
 }
 
 function bulletRect(bullet: Bullet): Rect {
-  return { x: bullet.x - 0.5, y: bullet.y - 2, w: 1, h: 4 };
+  return { x: bullet.x - 1.5, y: bullet.y - 4, w: 3, h: 8 };
 }
 
 function addScore(gs: HeadlessGameState, points: number): HeadlessGameState {
@@ -168,7 +168,7 @@ function updateHeadless(
   }
 
   if (input.left || input.right) {
-    const halfW = 6.5;
+    const halfW = 8;
     const dx = (input.right ? 1 : -1) * PLAYER_SPEED * DT;
     player = { ...player, x: Math.max(halfW, Math.min(PLAYFIELD_W - halfW, player.x + dx)) };
   }
@@ -276,7 +276,7 @@ function updateHeadless(
   }
 
   if (ufo.active) {
-    const rect: Rect = { x: ufo.x - 8, y: UFO_Y - 4, w: 16, h: 8 };
+    const rect: Rect = { x: ufo.x - 12, y: UFO_Y - 4, w: 24, h: 8 };
     for (let bi = 0; bi < bullets.length; bi++) {
       const b = bullets[bi];
       if (b.owner !== 'player' || deadBulletIndices.has(bi)) continue;
