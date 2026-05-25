@@ -280,8 +280,8 @@ describe('bottomInvadersPerColumn', () => {
 // ─── Max-3-enemy-bullets cap (documented behavior, verified in simulation) ────
 
 describe('MAX_ENEMY_BULLETS', () => {
-  it('MAX_ENEMY_BULLETS constant is 3', () => {
+  it('MAX_ENEMY_BULLETS constant is 5', () => {
     // This test documents the authoritative value so regressions are caught
-    expect(MAX_ENEMY_BULLETS).toBe(3);
+    expect(MAX_ENEMY_BULLETS).toBe(5);
   });
 });

@@ -236,7 +236,7 @@ export const PLAYER_SPEED = 80;
 export const BULLET_PLAYER_SPEED = -180;
 
 /** Enemy bullet speed (px/sec, positive = downward) */
-export const BULLET_ENEMY_SPEED = 90;
+export const BULLET_ENEMY_SPEED = 130;
 
 /** Invader grid starting position (top-left of the grid in playfield px) */
 export const INVADER_GRID_START_X = 16;
@@ -262,10 +262,10 @@ export const PLAYER_INVULN_DURATION = 1.5;
 export const EXPLOSION_FRAME_DURATION = 0.25;
 
 /** Max enemy bullets on screen simultaneously */
-export const MAX_ENEMY_BULLETS = 3;
+export const MAX_ENEMY_BULLETS = 5;
 
 /** Fire chance per eligible invader per 60Hz tick (~1/120) */
-export const INVADER_FIRE_CHANCE = 1 / 120;
+export const INVADER_FIRE_CHANCE = 1 / 70;
 
 /** UFO scoring values (chosen by RNG — see README for deliberate simplification note) */
 export const UFO_SCORE_VALUES: ReadonlyArray<number> = [50, 100, 150, 300];
