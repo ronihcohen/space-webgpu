@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+    <title>Leaderboard — Space GPU</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        background: #000;
+        color: #0f0;
+        font-family: monospace;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .panel {
+        width: min(440px, 100%);
+        border: 1px solid rgba(0, 255, 0, 0.7);
+        padding: 24px;
+        background: #000;
+      }
+      h1 {
+        font-size: 1.1rem;
+        margin-bottom: 20px;
+        text-align: center;
+        letter-spacing: 0;
+      }
+      .list {
+        list-style: none;
+        display: grid;
+        gap: 6px;
+        min-height: 80px;
+        margin-bottom: 16px;
+      }
+      .list li {
+        display: grid;
+        grid-template-columns: 32px 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .list strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .list em {
+        font-style: normal;
+        color: #fff;
+      }
+      .empty {
+        grid-template-columns: 1fr !important;
+        color: rgba(0, 255, 0, 0.75);
+      }
+      .status {
+        min-height: 1.2em;
+        margin-bottom: 16px;
+        color: #fff;
+      }
+      .play-link {
+        display: block;
+        width: 100%;
+        border: 1px solid rgba(0, 255, 0, 0.8);
+        background: rgba(0, 255, 0, 0.08);
+        color: #0f0;
+        font: inherit;
+        font-size: 1rem;
+        padding: 10px;
+        cursor: pointer;
+        text-align: center;
+        text-decoration: none;
+        border-top: 1px solid rgba(0, 255, 0, 0.35);
+        padding-top: 14px;
+        margin-top: 4px;
+      }
+      .play-link:hover {
+        background: rgba(0, 255, 0, 0.14);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>GLOBAL HIGH SCORES</h1>
+      <ol id="list" class="list"></ol>
+      <p id="status" class="status">Loading scores…</p>
+      <a href="/" class="play-link">Play Game</a>
+    </div>
+    <script type="module" src="/src/leaderboard-page.ts"></script>
+  </body>
+</html>
