@@ -14,11 +14,23 @@
  * avoid an "AudioContext was not allowed to start" warning on page load.
  *
  * Calling any sound method before `resume()` is a safe no-op.
+ *
+ * Background music: a single looping track (intergalactic-odyssey.ogg) decoded
+ * once into an AudioBuffer on resume(). Playback is driven by `setMusicPlaying`,
+ * which fades a dedicated gain node up/down — the looping source stays alive so
+ * pause/resume picks up exactly where it left off.
  */
+
+import musicUrl from '../assets/intergalactic-odyssey.ogg';
 
 export interface AudioManager {
   /** Unlock the AudioContext. Must be called from a user-gesture handler. */
   resume(): void;
+  /**
+   * Drive looping background music. `true` fades the track in (starting the
+   * loop on first call once decoded); `false` fades it out. Idempotent.
+   */
+  setMusicPlaying(on: boolean): void;
   /** Player fired a bullet. */
   shoot(): void;
   /** An invader was destroyed. */
@@ -49,6 +61,46 @@ export function makeAudioManager(): AudioManager {
   let ufoOsc: OscillatorNode | null = null;
   let ufoGain: GainNode | null = null;
   let ufoLfo: OscillatorNode | null = null;
+
+  // ── Background music state ────────────────────────────────────────────────
+  const MUSIC_VOLUME = 0.35; // sits under the SFX so blips/explosions stay audible
+  let musicBuffer: AudioBuffer | null = null;
+  let musicSource: AudioBufferSourceNode | null = null;
+  let musicGain: GainNode | null = null;
+  let musicWanted = false; // desired play state, applied once the buffer decodes
+
+  /** Fetch + decode the music file once. Safe to call repeatedly. */
+  function loadMusic(): void {
+    if (ctx === null || musicBuffer !== null) return;
+    const audioCtx = ctx;
+    fetch(musicUrl)
+      .then((r) => r.arrayBuffer())
+      .then((data) => audioCtx.decodeAudioData(data))
+      .then((buf) => {
+        musicBuffer = buf;
+        if (musicWanted) startMusicSource();
+      })
+      .catch(() => {
+        // Silent: missing/undecodable music shouldn't break the game.
+      });
+  }
+
+  /** Create the looping source + gain and begin playback (faded in). */
+  function startMusicSource(): void {
+    if (ctx === null || musicBuffer === null || musicSource !== null) return;
+
+    musicGain = ctx.createGain();
+    musicGain.gain.setValueAtTime(0, ctx.currentTime);
+    musicGain.connect(ctx.destination);
+
+    musicSource = ctx.createBufferSource();
+    musicSource.buffer = musicBuffer;
+    musicSource.loop = true;
+    musicSource.connect(musicGain);
+    musicSource.start();
+
+    musicGain.gain.linearRampToValueAtTime(MUSIC_VOLUME, ctx.currentTime + 0.8);
+  }
 
   // ── One-shot tone helper ──────────────────────────────────────────────────
   /**
@@ -95,6 +147,24 @@ export function makeAudioManager(): AudioManager {
         ctx.resume().catch(() => {
           // Silent: if resume fails (e.g. user has audio blocked), continue without sound.
         });
+      }
+      loadMusic(); // kick off decode now that we have a context (lazy, idempotent)
+    },
+
+    setMusicPlaying(on: boolean): void {
+      musicWanted = on;
+      if (ctx === null || ctx.state !== 'running') return;
+
+      if (on) {
+        if (musicSource === null) {
+          startMusicSource(); // no-op until the buffer has decoded
+        } else if (musicGain !== null) {
+          musicGain.gain.cancelScheduledValues(ctx.currentTime);
+          musicGain.gain.linearRampToValueAtTime(MUSIC_VOLUME, ctx.currentTime + 0.5);
+        }
+      } else if (musicGain !== null) {
+        musicGain.gain.cancelScheduledValues(ctx.currentTime);
+        musicGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.4);
       }
     },
 

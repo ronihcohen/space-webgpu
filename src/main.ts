@@ -1104,6 +1104,12 @@ async function bootstrap(): Promise<void> {
       acc = 0; // don't accumulate while paused/idle
     }
 
+    // Background music plays whenever the game is actively running (this also
+    // covers the wave-clear interstitial, where phase stays PLAYING). Paused,
+    // idle, game-over, blur and tab-hidden all leave PLAYING → music fades out.
+    // setMusicPlaying is idempotent, so calling it every frame is cheap.
+    audio.setMusicPlaying(gs.phase === 'PLAYING');
+
     // Render
     const time = (now - startTime) / 1000;
     const instances = buildInstances(sim, gs, renderer, waveClearTimer, waveClearLevel, waveClearPhrase, gameOverTimer);
