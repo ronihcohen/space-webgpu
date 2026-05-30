@@ -28,7 +28,7 @@ No Canvas 2D. No WebGL.
 - UFO mystery ship with random score values (50 / 100 / 150 / 300)
 - 3 lives with explosion animation and brief invulnerability on respawn
 - Starfield background rendered as a fullscreen fragment shader
-- Sound effects synthesized with Web Audio (shoot, invader march, hits, UFO)
+- Sound effects synthesized with Web Audio (shoot, invader march, hits, UFO) plus a looping background music track
 - HUD rendered through the sprite pipeline — score, hi-score, lives, level
 - High score persisted to `localStorage`
 - Integer-scale canvas (nearest-neighbor, no blur) with DPR-aware resize
@@ -84,3 +84,9 @@ v1 uses plain RNG over `[50, 100, 150, 300]`. The arcade original keys the value
 - WebGL fallback
 - Multiplayer
 - Mobile-portrait layout
+
+---
+
+## Credits
+
+- Background music: *Intergalactic Odyssey* by [Patrick de Arteaga](https://patrickdearteaga.com), licensed under Creative Commons.
