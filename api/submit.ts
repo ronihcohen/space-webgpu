@@ -29,7 +29,9 @@ export default async function handler(req: { method?: string; body?: SubmitBody 
 }): Promise<void> {
   if (req.method === 'OPTIONS') {
     setCorsPreflightHeaders(res);
-    res.status(204).json(null);
+    // 204 + a JSON body throws ERR_HTTP_BODY_NOT_ALLOWED in Node; 200 is fine
+    // for a preflight response since the browser only inspects headers.
+    res.status(200).json({});
     return;
   }
 
