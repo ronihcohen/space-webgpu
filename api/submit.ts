@@ -1,6 +1,7 @@
 import { sql } from './_lib/db.js';
 import { verifySeed } from './_lib/sign.js';
 import { sanitiseName } from '../src/leaderboard.js';
+import { setCorsHeaders, setCorsPreflightHeaders, type CorsResponse } from './_lib/cors.js';
 
 interface SubmitBody {
   seed?: unknown;
@@ -23,9 +24,17 @@ function validScore(value: unknown): number | null {
   return score;
 }
 
-export default async function handler(req: { method?: string; body?: SubmitBody }, res: {
+export default async function handler(req: { method?: string; body?: SubmitBody }, res: CorsResponse & {
   status(code: number): { json(value: unknown): void };
 }): Promise<void> {
+  if (req.method === 'OPTIONS') {
+    setCorsPreflightHeaders(res);
+    res.status(204).json(null);
+    return;
+  }
+
+  setCorsHeaders(res);
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'method-not-allowed' });
     return;

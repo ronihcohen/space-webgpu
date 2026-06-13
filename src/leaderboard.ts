@@ -1,4 +1,7 @@
-const API = '/api';
+// Same-origin '/api' on the Vercel deploy (default). The itch.io build sets
+// VITE_API_BASE to the production Vercel URL so the global leaderboard works
+// cross-origin from itch's static-game domain.
+const API = `${(import.meta.env.VITE_API_BASE as string | undefined ?? '').replace(/\/$/, '')}/api`;
 const LEADERBOARD_NAME_KEY = 'space-webgpu-leaderboard-name';
 const MAX_SCORE = 999999;
 
